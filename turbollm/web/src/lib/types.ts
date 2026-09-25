@@ -711,13 +711,17 @@ export type LayaStatus = {
   state: 'starting' | 'running' | 'stopping'
 }
 
+/** The engine a text classification model runs on (ADR-444): vLLM for a Jev model, the Laya engine for a Laya
+ *  one. Twin of `TextClassifierRuntime` in src/models/text-classifier.ts. */
+export type TextClassificationRuntime = 'vllm' | 'laya'
+
 /** Jev and Laya as one feature on /api/v1/status (ADR-444); twin of src/api/text-classification-status.ts.
  *  `runtime: 'vllm'` is a Jev model, which takes the Workspace over; `'laya'` never does. `labels` comes with a
  *  Jev model, `checkpoints` with a Laya one. */
 export type TextClassificationStatus = {
   key: string
   name: string
-  runtime: 'vllm' | 'laya'
+  runtime: TextClassificationRuntime
   state: 'starting' | 'running' | 'stopping'
   slot: 'primary' | 'pool'
   labels?: JevLabel[]
@@ -1012,11 +1016,15 @@ export type HfSearchItem = {
   gated: boolean
   tags: string[]
   localCount: number
+  /** Only on a Text classification category row: the engine the repo loads on (ADR-444). */
+  textClassification?: { runtime: TextClassificationRuntime }
 }
 
-export type HfSearchResult = {
-  results: HfSearchItem[]
-}
+export type HfSearchRows = { results: HfSearchItem[] }
+
+/** Discover's "Text classification" category (ADR-444): the Laya bundles and verified Jev (NLI)
+ *  models TurboLLM can run, whichever engine is active. */
+export type HfSearchCategory = 'text-classification'
 
 /** Mirrors src/hf/hf.ts HfSortOption. 'best-match' is HF's own relevance ranking for a
  *  text query (meaningless when browsing with no query — the daemon falls back to

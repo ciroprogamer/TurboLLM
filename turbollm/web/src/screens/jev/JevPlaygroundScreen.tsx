@@ -1,7 +1,7 @@
 // The text classification playground (ADR-444) — the Workspace's only surface while a Jev model is
 // loaded (ADR-434 (b), (c), (i)(1), (i)(5)) and a page beside chat while a Laya model is (ADR-443),
-// rebuilt as the System One request itself (ADR-439): the two
-// JSON editors ARE the body that gets posted, and the answers sit beside them.
+// rebuilt as the System One request itself (ADR-439): the two JSON editors ARE the body that gets
+// posted, and the answers sit beside them.
 //
 // It holds no conversation, no history and no sidebar: there is exactly one thing to do here.
 import { useEffect, useRef, useState } from 'react'

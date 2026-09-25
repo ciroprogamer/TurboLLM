@@ -2,9 +2,14 @@
 // is active. A Laya bundle is known from its file names and library tag alone; an NLI cross-encoder only from its own
 // config.json, which detectJev reads (ADR-436 (1)). The listing gives file names and the root config's architectures for free.
 import { detectJev } from '../models/jev'
+import type { TextClassifierRuntime } from '../models/text-classifier'
 import { checkpointDirs } from './checkpoints'
 import type { HfSortOption, RawSearchItem, RawTreeEntry } from './hf'
 import { isLayaEngineRepo, isLayaRepo } from './laya-repo'
+import { repoIdOf } from './repo-id'
+
+/** The `category` of GET /api/v1/hf/search that asks for this search instead of the engine-adapted one. */
+export const TEXT_CLASSIFICATION_CATEGORY = 'text-classification'
 
 /** One row of HF's model list, with the file names and root config the category is judged from. */
 export interface ListedModel extends RawSearchItem {
@@ -12,12 +17,9 @@ export interface ListedModel extends RawSearchItem {
   config?: { architectures?: unknown }
 }
 
-/** The engine a text-classification repo loads on: the Laya engine, or vLLM for a Jev (NLI) model. */
-export type TextClassificationRuntime = 'laya' | 'vllm'
-
 export interface TextClassificationRepo {
   model: ListedModel
-  runtime: TextClassificationRuntime
+  runtime: TextClassifierRuntime
 }
 
 /** How the category reads Hugging Face: one model listing by its query parameters, and one config.json. */
@@ -39,9 +41,9 @@ export async function findTextClassificationRepos(
   sort: HfSortOption,
   hub: TextClassificationHub,
 ): Promise<TextClassificationRepo[]> {
-  const listings = await answeredListings(hub)
+  const listings = await fetchListings(hub)
   const candidates = mergeListings(listings, sort).flatMap((model) => textClassificationCandidate(model) ?? [])
-  return runnable(candidates, hub)
+  return keepRunnable(candidates, hub)
 }
 
 /** HF's text-classification tag misses the NLI models it tags zero-shot-classification, which the nli tag finds; the
@@ -56,7 +58,7 @@ const LISTED_FIELDS = ['siblings', 'config', 'library_name', 'downloads', 'likes
 
 /** A failed listing is left out, as searchModels leaves out a failed Laya search. Only when none answers does the
  *  search fail, with the first listing's error. */
-async function answeredListings(hub: TextClassificationHub): Promise<ListedModel[][]> {
+async function fetchListings(hub: TextClassificationHub): Promise<ListedModel[][]> {
   const settled = await Promise.allSettled(
     CATEGORY_LISTINGS.map((listing) => hub.listModels(`${listing}&${LISTED_FIELDS}`)),
   )
@@ -131,7 +133,7 @@ const SEQUENCE_CLASSIFIER_SUFFIX = 'ForSequenceClassification'
 
 type NliCandidate = Extract<TextClassificationCandidate, { runtime: 'vllm' }>
 
-async function runnable(
+async function keepRunnable(
   candidates: TextClassificationCandidate[],
   hub: TextClassificationHub,
 ): Promise<TextClassificationRepo[]> {
@@ -161,8 +163,4 @@ async function isJevCheckpoint(candidate: NliCandidate, hub: TextClassificationH
   } catch {
     return false
   }
-}
-
-function repoIdOf(model: ListedModel): string {
-  return model.id ?? model.modelId ?? ''
 }

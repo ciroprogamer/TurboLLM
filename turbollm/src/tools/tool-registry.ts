@@ -17,7 +17,7 @@ import {
   LIST_AGENTS_TOOL, CREATE_AGENT_TOOL, execListAgents, execCreateAgent, type AgentToolsStore,
 } from '../chat/chat-agent-tools'
 import { LIST_MODELS_TOOL, execListModels, type ModelToolsStore } from '../models/model-tools'
-import { isTextClassifier } from '../models/text-classifier'
+import { isTextClassifierKey } from '../models/text-classifier'
 
 export interface ToolDefinition {
   type: 'function'
@@ -79,10 +79,7 @@ export class ToolRegistry {
   private textClassifierPredicate(): ((key: string) => boolean) | undefined {
     const models = this.models
     if (!models) return undefined
-    return (key: string) => {
-      const entry = models.list().models.find((m) => m.key === key)
-      return entry !== undefined && isTextClassifier(entry)
-    }
+    return (key: string) => isTextClassifierKey(models.list().models, key)
   }
 
   /** Update config (called on settings change without restart). */

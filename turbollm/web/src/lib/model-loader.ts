@@ -1,9 +1,10 @@
 // The one way the UI loads a local model (ADR-434 (i)(3)).
 //
 // A chat model loads exactly as it always has. A text classification model on vLLM (a Jev model)
-// unloads whatever is running and takes Workspace over, so it asks first — but only when something really is running, the same
-// "active work, not an open window" rule as the daemon-restart gate. When the daemon cannot be
-// asked, it fails OPEN to the confirmation: "I couldn't check" is not "nothing is running".
+// unloads whatever is running and takes Workspace over, so it asks first — but only when something
+// really is running, the same "active work, not an open window" rule as the daemon-restart gate.
+// When the daemon cannot be asked, it fails OPEN to the confirmation: "I couldn't check" is not
+// "nothing is running".
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from '../components/ui/sonner'
@@ -13,7 +14,8 @@ import { getActivity } from './jev-api'
 import { TEXT_CLASSIFICATION_PATH } from './jev-mode'
 import { textClassificationRuntime } from './model-kind'
 import { useModelActions, useStatus } from './queries'
-import type { ActiveWork, Status } from './types'
+import { loadedSystemOneModel } from './systemone-model'
+import type { ActiveWork, Status, TextClassificationStatus } from './types'
 
 export type { LoadOptions, LoadTarget }
 
@@ -104,7 +106,9 @@ function useLoadStarters(): {
 export function useJevLoadedToast(): void {
   const pendingJevKey = useJevLoadStore((s) => s.pendingJevKey)
   const setPendingJevKey = useJevLoadStore((s) => s.setPendingJevKey)
-  const pending = aliveTextClassifier(useStatus().data, pendingJevKey)
+  const status = useStatus().data
+  const pending = aliveTextClassifier(status, pendingJevKey)
+  const playgroundKey = loadedSystemOneModel(status, undefined)?.key
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
@@ -113,7 +117,13 @@ export function useJevLoadedToast(): void {
     // Clearing first is what makes this fire exactly once: the next poll finds no pending key.
     setPendingJevKey(null)
     if (pathname === TEXT_CLASSIFICATION_PATH) return
-    toast.success(`${pending.name} is ready`, {
+    const ready = `${pending.name} is ready`
+    // A Laya model loaded beside a Jev model is not what the playground shows, so it is not offered there.
+    if (pending.key !== playgroundKey) {
+      toast.success(ready)
+      return
+    }
+    toast.success(ready, {
       action: {
         label: 'Open playground',
         onClick: () => {
@@ -122,16 +132,19 @@ export function useJevLoadedToast(): void {
         },
       },
     })
-  }, [pending, setPendingJevKey, pathname, navigate])
+  }, [pending, playgroundKey, setPendingJevKey, pathname, navigate])
 }
 
 /** The alive text classification model with this key. The one status field names only the model that owns the
  *  Workspace when a Jev and a Laya model are both alive (ADR-444), so a Laya load beside a Jev model is found in
  *  the per-runtime fields. */
-function aliveTextClassifier(status: Status | undefined, key: string | null) {
+function aliveTextClassifier(status: Status | undefined, key: string | null): AliveClassifier | undefined {
   if (!status || !key) return undefined
-  return [status.textClassification, status.jev, status.laya].find((model) => model?.key === key)
+  return [status.textClassification, status.jev, status.laya].find((model) => model?.key === key) ?? undefined
 }
+
+/** What the toast reads of an alive text classification model, whichever status field named it. */
+type AliveClassifier = Pick<TextClassificationStatus, 'key' | 'name' | 'state'>
 
 /** null when the daemon could not be asked — the caller treats that as "ask the user". */
 async function readActiveWork(): Promise<ActiveWork | null> {

@@ -3,13 +3,14 @@
 // like them — never part of the shared `buildModelStatus`.
 import type { Deps } from '../deps'
 import type { JevLabel } from '../models/jev'
+import type { TextClassifierRuntime } from '../models/text-classifier'
 import { jevStatus, type JevStatus } from './jev-status'
 import { layaStatus, type LayaStatus } from './laya-status'
 
 export interface TextClassificationStatus {
   key: string
   name: string
-  runtime: 'vllm' | 'laya'
+  runtime: TextClassifierRuntime
   state: 'starting' | 'running' | 'stopping'
   slot: 'primary' | 'pool'
   labels?: JevLabel[]

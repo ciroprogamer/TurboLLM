@@ -9,7 +9,7 @@ import {
   CREATE_ROUTINE_TOOL, LIST_ROUTINES_TOOL, UPDATE_ROUTINE_TOOL, DELETE_ROUTINE_TOOL, RUN_ROUTINE_NOW_TOOL,
   type RoutineToolsStore,
 } from './routine-tools'
-import { CODE_GATE_MESSAGE, JEV_ROUTINE_MODEL_MESSAGE } from './routine-routes'
+import { CODE_GATE_MESSAGE, TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE } from './routine-routes'
 
 function freshStore(): ConversationStore {
   return new ConversationStore(mkdtempSync(join(tmpdir(), 'routine-tools-test-')))
@@ -833,7 +833,7 @@ test('execCreateRoutine: a Jev modelKey is refused and nothing is stored', async
     scheduleRule: { kind: 'daily', hour: 9, minute: 0 }, modelKey: JEV_TOOL_KEY, agentId: 'agent-1',
   }, store, false, undefined, isJev)
 
-  assert.equal(msg, `Error: ${JEV_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
+  assert.equal(msg, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
   assert.equal(store.listRoutines().length, 0)
 })
 
@@ -855,7 +855,7 @@ test('execUpdateRoutine: switching a routine to a Jev model is refused, even wit
 
   const msg = execUpdateRoutine({ routineId: created.id, modelKey: JEV_TOOL_KEY, confirm: true }, store, false, isJev)
 
-  assert.equal(msg, `Error: ${JEV_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
+  assert.equal(msg, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
   assert.equal(store.getRoutine(created.id)?.modelKey, 'm')
 })
 

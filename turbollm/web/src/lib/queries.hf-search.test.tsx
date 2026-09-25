@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HfSearchCategory } from './api'
+import type { HfSearchCategory } from './types'
 import { useHfSearch } from './queries'
 
 const ROWS = { results: [{ repo: 'unsloth/Qwen3-8B-GGUF' }] }

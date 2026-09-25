@@ -307,10 +307,11 @@ export const CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '80'
 export interface ModelEntry {
   key: string
   name: string
-  /** Present when this is a Jev or a Laya model — text classification: it labels or scores text and
-   *  cannot chat (ADR-434 (f), ADR-444), so no coding agent may be pointed at it. Shape irrelevant
-   *  here — only presence matters. */
+  /** Present when this is a Jev model. It and `laya` mark text classification: a model that labels or
+   *  scores text and cannot chat (ADR-434 (f), ADR-444), so no coding agent may be pointed at it.
+   *  Shape irrelevant here — only presence matters. */
   jev?: unknown
+  /** Present when this is a Laya model — text classification too, exactly as `jev` above. */
   laya?: unknown
   /** The model's own maximum context from its GGUF metadata — a ceiling, not what it will load with. */
   nativeCtx?: number

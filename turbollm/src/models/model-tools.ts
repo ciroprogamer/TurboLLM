@@ -5,7 +5,7 @@
 // session asked to create a routine picked `modelKey: "gpt-4"` — a real cloud model name, not
 // anything in this machine's library — because it had no data to work from and nothing else to
 // guess from. A routine created with a modelKey that doesn't exist can never fire successfully.
-import { isTextClassifier } from './text-classifier'
+import { textClassifierKind } from './text-classifier'
 
 /** The narrow slice of Scanner this tool touches. A real Scanner instance satisfies this
  *  structurally (TypeScript structural typing, same idiom as RoutineToolsStore/AgentToolsStore)
@@ -35,8 +35,9 @@ export function formatModelLine(
   m: { key: string; name: string; quant: string; sizeLabel: string; jev?: unknown; laya?: unknown },
 ): string {
   const line = `- ${m.key} — ${m.name} (${m.quant}, ${m.sizeLabel})`
-  if (!isTextClassifier(m)) return line
-  return `${line} — kind: ${m.jev ? 'jev' : 'laya'} (text classification; cannot chat or run a routine)`
+  const kind = textClassifierKind(m)
+  if (!kind) return line
+  return `${line} — kind: ${kind} (text classification; cannot chat or run a routine)`
 }
 
 export function execListModels(_args: Record<string, unknown>, store: ModelToolsStore): string {

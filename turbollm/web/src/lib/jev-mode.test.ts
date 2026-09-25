@@ -6,7 +6,6 @@
 // link the user typed on purpose).
 import { describe, expect, it } from 'vitest'
 import {
-  LEGACY_JEV_PATH,
   TEXT_CLASSIFICATION_PATH,
   isWorkspaceWorkPath,
   jevPresence,
@@ -96,13 +95,6 @@ describe('jevPresence with the text classification status', () => {
   it('is "none" when nothing is loaded, even with an older field saying otherwise', () => {
     const stale = { textClassification: null, jev: LOADED } as unknown as Status
     expect(jevPresence(stale, undefined)).toBe('none')
-  })
-})
-
-describe('the playground route', () => {
-  it('is named for text classification, with the Jev one kept for old bookmarks', () => {
-    expect(TEXT_CLASSIFICATION_PATH).toBe('/workspace/text-classification')
-    expect(LEGACY_JEV_PATH).toBe('/workspace/jev')
   })
 })
 

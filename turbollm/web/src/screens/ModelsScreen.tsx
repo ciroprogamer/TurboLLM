@@ -722,10 +722,14 @@ function useDeleteModel() {
   })
 }
 
-/** Why the Load button is dead. Only a Jev model takes the daemon's own wording:
- *  `incompatibleReason` is the short chip label, and serving it here for every model
- *  would duplicate the chip beside it and drop the half that says what to do about it. */
+const INSTALL_LAYA_ENGINE_TITLE = 'Install the Laya engine (Engines) to load this model.'
+
+/** Why the Load button is dead. A text classification model needs its own runtime, so "switch to" is the wrong
+ *  advice for it. A Jev model takes the daemon's own wording, which names vLLM: `incompatibleReason` is the short
+ *  chip label, and serving it here for every model would duplicate the chip beside it and drop the half that says
+ *  what to do about it. A Laya model never runs on the active engine at all: its engine is installed beside it. */
 function cannotLoadTitle(m: ModelEntry, needsEngine: string): string {
+  if (m.laya) return INSTALL_LAYA_ENGINE_TITLE
   if (m.jev && m.incompatibleReason) return m.incompatibleReason
   return `The active engine can't load this model — switch to ${needsEngine}`
 }

@@ -1,10 +1,9 @@
-import type { ModelEntry, TextClassificationStatus } from './types'
-
-export type TextClassificationRuntime = TextClassificationStatus['runtime']
+import type { ModelEntry, TextClassificationRuntime } from './types'
 
 const RUNTIME_LABELS: Record<TextClassificationRuntime, string> = { vllm: 'vLLM', laya: 'Laya engine' }
 
-/** A model a chat/code/routine turn can run on. Jev models label text; they never chat. */
+/** A model a chat/code/routine turn can run on. A text classification model labels or scores text; it never
+ *  chats. */
 export function isChatModel(m: Pick<ModelEntry, 'jev' | 'laya'>): boolean {
   return !isSystemOneModel(m)
 }
@@ -14,7 +13,7 @@ export function isChatModel(m: Pick<ModelEntry, 'jev' | 'laya'>): boolean {
  *  picker (SwitchModelMenu) to group "not a chat model" rows together regardless of which of the
  *  two it is. */
 export function isSystemOneModel(m: Pick<ModelEntry, 'jev' | 'laya'>): boolean {
-  return !!m.jev || !!m.laya
+  return textClassificationRuntime(m) !== null
 }
 
 /** Which runtime serves a text classification model (ADR-444), or null for a chat model. Structural, so a load

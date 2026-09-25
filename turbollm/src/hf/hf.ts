@@ -5,13 +5,11 @@
 // them to a stable error envelope.
 import { quantFromName } from '../gguf/gguf'
 import { detectJev } from '../models/jev'
+import type { TextClassifierRuntime } from '../models/text-classifier'
 import { findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES, type HfCheckpoint } from './checkpoints'
 import { isLayaEngineRepo, isLayaRepo, isOtherRuntimePort, layaRepoFiles } from './laya-repo'
-import {
-  findTextClassificationRepos,
-  type ListedModel,
-  type TextClassificationRuntime,
-} from './text-classification-search'
+import { repoIdOf } from './repo-id'
+import { findTextClassificationRepos, type ListedModel } from './text-classification-search'
 
 const BASE = 'https://huggingface.co'
 const CACHE_TTL_MS = 5 * 60 * 1000
@@ -42,7 +40,7 @@ export interface HfSearchItem {
   gated: boolean
   tags: string[]
   /** Only on {@link HfClient.searchTextClassification} rows: the engine the repo loads on (ADR-444). */
-  textClassification?: { runtime: TextClassificationRuntime }
+  textClassification?: { runtime: TextClassifierRuntime }
 }
 
 /** Sort options for both search and browse (spec 10 §7 rewrite). 'best-match' is HF's
@@ -72,13 +70,9 @@ function libraryFilterFor(engineKind?: string): string {
   return 'filter=gguf&'
 }
 
-function repoIdOf(m: RawSearchItem): string {
-  return m.id ?? m.modelId ?? ''
-}
-
 function toSearchItem(m: RawSearchItem): HfSearchItem {
   return {
-    repo: m.id ?? m.modelId ?? '',
+    repo: repoIdOf(m),
     downloads: m.downloads ?? 0,
     likes: m.likes ?? 0,
     updatedAt: m.lastModified ?? m.createdAt ?? '',

@@ -13,7 +13,7 @@ import { noteLocalActivity } from '../link/host-idle'
 import { linkHeaders, proxyStream } from '../link/link-proxy'
 import { formatRemoteId } from '../link/model-id'
 import type { ModelEntry } from '../models/scanner'
-import { isTextClassifier, textClassifierRuntime } from '../models/text-classifier'
+import { isTextClassifier, textClassifierKind } from '../models/text-classifier'
 import { extractParams, summarizeRequest, drainOpenAiSseForLog, requestLogConfig, type RequestLogFinal } from '../observability/request-log'
 import { sessionAuth } from '../code/session-auth'
 import { parseReasoningEffort } from '../chat/reasoning-effort'
@@ -109,7 +109,7 @@ interface WrongEndpointRefusal {
 /** Why a chat / embeddings / messages request naming a text classification model is refused, and where to go
  *  instead. One rule for Jev and Laya (ADR-444); each runtime keeps its own error code and endpoint pointer. */
 function wrongEndpointRefusal(entry: ModelEntry, request: 'chat' | 'embeddings'): WrongEndpointRefusal {
-  return textClassifierRuntime(entry) === 'vllm'
+  return textClassifierKind(entry) === 'jev'
     ? { code: 'jev_model_wrong_endpoint', message: jevWrongEndpointMessage(entry.name, request) }
     : { code: 'laya_model_wrong_endpoint', message: layaWrongEndpointMessage(entry.name, request) }
 }
@@ -128,8 +128,8 @@ function layaWrongEndpointMessage(modelName: string, request: 'chat' | 'embeddin
 
 /** How GET /v1/models marks a text classification model: its own kind, and the task it serves instead of chat. */
 function textClassifierListing(m: ModelEntry): Record<string, string> {
-  if (!isTextClassifier(m)) return {}
-  return { kind: m.jev ? 'jev' : 'laya', task: 'text-classification' }
+  const kind = textClassifierKind(m)
+  return kind ? { kind, task: 'text-classification' } : {}
 }
 
 /** Classifies a `d.gate.acquire()` failure into one {status, type, message} shape shared by both

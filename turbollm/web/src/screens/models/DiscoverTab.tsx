@@ -9,9 +9,10 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import { Link2, Lock, Search } from 'lucide-react'
-import { ApiError, track, type HfSearchCategory, type HfSearchRow, type TextClassificationRuntime } from '../../lib/api'
+import { ApiError, track } from '../../lib/api'
+import { textClassificationRuntimeLabel } from '../../lib/model-kind'
 import { useHfSearch, useSysInfo } from '../../lib/queries'
-import type { HfSortOption } from '../../lib/types'
+import type { HfSearchCategory, HfSearchItem, HfSortOption, TextClassificationRuntime } from '../../lib/types'
 import { fitBudgetMb, searchRowFitsHardware } from '../../lib/vram'
 import { requiredMb } from '../../lib/onboarding-pick'
 import { isAndroidOs } from '../../lib/platform'
@@ -64,11 +65,6 @@ const SORT_LABEL: Record<HfSortOption, string> = {
 }
 
 const TEXT_CLASSIFICATION_SCOPE = 'Laya and Jev models TurboLLM can run, whichever engine is active'
-
-const RUNTIME_LABEL: Record<TextClassificationRuntime, string> = {
-  laya: 'Laya engine',
-  vllm: 'vLLM',
-}
 
 // List/detail split width — persisted like ModelDetailDialog's config-panel width, but
 // as a plain in-flow flex-basis (not a CSS var pinned against the app shell), since this
@@ -269,19 +265,9 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
                 screen="models"
               />
             ) : results.length === 0 ? (
-              // Distinguish "HF had nothing" from "we hid everything HF had" — otherwise the
-              // Android default-on filter looks like a broken search.
               <EmptyState
                 icon={<Search size={24} />}
-                message={
-                  hiddenByFit > 0
-                    ? `None of the ${hiddenByFit} results fit this machine's memory. Untick “Fits my hardware” to see them.`
-                    : category
-                      ? noTextClassifiersMessage(debounced)
-                      : searching
-                        ? `No models found for “${debounced}”.`
-                        : 'No models found.'
-                }
+                message={emptyListMessage({ hiddenByFit, category, query: debounced })}
               />
             ) : (
               results.map((r) => (
@@ -374,6 +360,20 @@ function TextClassificationToggle({ on, onToggle }: { on: boolean; onToggle: () 
       Text classification
     </button>
   )
+}
+
+/** Why the list is empty. "Hugging Face had nothing" and "the fit filter hid everything it had" must read
+ *  differently, or the Android default-on filter looks like a broken search. */
+function emptyListMessage({ hiddenByFit, category, query }: {
+  hiddenByFit: number
+  category: HfSearchCategory | undefined
+  query: string
+}): string {
+  if (hiddenByFit > 0) {
+    return `None of the ${hiddenByFit} results fit this machine's memory. Untick “Fits my hardware” to see them.`
+  }
+  if (category) return noTextClassifiersMessage(query)
+  return query ? `No models found for “${query}”.` : 'No models found.'
 }
 
 function noTextClassifiersMessage(query: string): string {
@@ -480,7 +480,7 @@ function ResultListRow({
   selected,
   onSelect,
 }: {
-  item: HfSearchRow
+  item: HfSearchItem
   selected: boolean
   onSelect: () => void
 }) {
@@ -546,7 +546,7 @@ function RuntimeLabel({ runtime }: { runtime: TextClassificationRuntime }) {
       className="inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium"
       style={{ color: 'var(--muted)', background: 'color-mix(in srgb, var(--muted) 14%, transparent)' }}
     >
-      {RUNTIME_LABEL[runtime]}
+      {textClassificationRuntimeLabel(runtime)}
     </span>
   )
 }

@@ -21,7 +21,8 @@ import type {
   HwUsage,
   UpdatePolicy,
   HfRepoDetail,
-  HfSearchItem,
+  HfSearchCategory,
+  HfSearchRows,
   HfSortOption,
   HfTokenTest,
   LoadProfile,
@@ -1075,18 +1076,6 @@ export function getSysInfo(): Promise<SysInfo> {
 }
 
 // ── Hugging Face discovery (spec 10 §2–4, §7 rewrite) ────────────────────────
-/** Discover's "Text classification" category (ADR-444): the Laya bundles and verified Jev (NLI)
- *  models TurboLLM can run, whichever engine is active. */
-export type HfSearchCategory = 'text-classification'
-
-/** The engine a text-classification repo loads on: a Laya bundle on Laya, a Jev (NLI) model on vLLM. */
-export type TextClassificationRuntime = 'laya' | 'vllm'
-
-/** A Discover row. Only category rows carry `textClassification`. */
-export type HfSearchRow = HfSearchItem & { textClassification?: { runtime: TextClassificationRuntime } }
-
-export type HfSearchRows = { results: HfSearchRow[] }
-
 /** Search (q set) or browse (q blank) HF repos, sorted by `sort`. Each row carries
  *  `localCount` (variants already in library). The library/format filter adapts to the
  *  active engine server-side — never hardcoded to GGUF — unless `category` asks for a

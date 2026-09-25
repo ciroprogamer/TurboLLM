@@ -6,7 +6,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConversationStore } from '../chat/db'
-import { registerRoutineRoutes, validateCreate, CODE_GATE_MESSAGE, JEV_ROUTINE_MODEL_MESSAGE } from './routine-routes'
+import { registerRoutineRoutes, validateCreate, CODE_GATE_MESSAGE, TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE } from './routine-routes'
 import { RoutineScheduler } from './scheduler'
 import { executeRoutine } from './execute'
 import type { Deps } from '../deps'
@@ -1008,7 +1008,7 @@ test('POST /api/v1/routines refuses a Jev modelKey with a clear 400, creating no
   const res = await postRoutine(app, JEV_KEY)
 
   assert.equal(res.status, 400)
-  assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: JEV_ROUTINE_MODEL_MESSAGE(JEV_KEY) } })
+  assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(JEV_KEY) } })
   assert.deepEqual(db.listRoutines(), [])
 })
 
@@ -1030,7 +1030,7 @@ test('PUT /api/v1/routines/:id refuses a switch to a Jev model and leaves the ro
   })
 
   assert.equal(res.status, 400)
-  assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: JEV_ROUTINE_MODEL_MESSAGE(JEV_KEY) } })
+  assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(JEV_KEY) } })
   assert.equal(db.getRoutine(created.id)?.modelKey, 'm')
 })
 

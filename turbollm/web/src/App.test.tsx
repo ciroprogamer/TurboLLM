@@ -6,9 +6,9 @@
 // Like App.redirects.test.tsx, this mounts the gate over probe routes rather than the whole
 // <App/>: what is under test is which path the gate sends each URL to, not the app shell.
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { LegacyPlaygroundRedirect, WorkspaceModeGate } from './App'
+import { WorkspaceModeGate } from './App'
 import type { ModelEntry, Status } from './lib/types'
 
 const state: { status: Status | undefined; models: ModelEntry[] | undefined } = {
@@ -45,7 +45,8 @@ function landOn(path: string) {
           <Route path="/workspace/code/:sessionId" element={<Probe />} />
           <Route path="/workspace/routines" element={<Probe />} />
           <Route path="/workspace/text-classification" element={<Probe />} />
-          <Route path="/workspace/jev" element={<LegacyPlaygroundRedirect />} />
+          {/* Mirrors App.tsx's back-compat line for the playground's old URL, kept in sync by hand. */}
+          <Route path="/workspace/jev" element={<Navigate to="/workspace/text-classification" replace />} />
         </Route>
         <Route path="/models" element={<Probe />} />
       </Routes>

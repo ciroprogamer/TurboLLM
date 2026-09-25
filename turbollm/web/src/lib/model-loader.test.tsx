@@ -479,6 +479,35 @@ describe('useJevLoadedToast — a Laya model', () => {
     expect(h.toastSuccess).toHaveBeenCalledTimes(1)
     expect(h.toastSuccess.mock.calls[0][0]).toBe('laya is ready')
   })
+
+  // The playground shows the Jev model while one is alive, so "Open playground" would open the wrong model.
+  it('offers no playground for a Laya model the playground is not showing', () => {
+    useJevLoadStore.setState({ pendingJevKey: 'laya-key' })
+    h.status = {
+      textClassification: { ...READY, runtime: 'vllm' },
+      jev: READY,
+      laya: { key: 'laya-key', name: 'laya', checkpoints: ['english'], state: 'running' },
+    } as unknown as Status
+
+    renderHook(() => useJevLoadedToast())
+
+    expect(h.toastSuccess).toHaveBeenCalledTimes(1)
+    expect(h.toastSuccess.mock.calls[0][0]).toBe('laya is ready')
+    expect(h.toastSuccess.mock.calls[0][1]?.action).toBeUndefined()
+  })
+
+  it('offers no playground for it on a daemon without the text classification field either', () => {
+    useJevLoadStore.setState({ pendingJevKey: 'laya-key' })
+    h.status = {
+      jev: READY,
+      laya: { key: 'laya-key', name: 'laya', checkpoints: ['english'], state: 'running' },
+    } as unknown as Status
+
+    renderHook(() => useJevLoadedToast())
+
+    expect(h.toastSuccess.mock.calls[0][0]).toBe('laya is ready')
+    expect(h.toastSuccess.mock.calls[0][1]?.action).toBeUndefined()
+  })
 })
 
 // ADR-444: a daemon names the text classification model in one field.

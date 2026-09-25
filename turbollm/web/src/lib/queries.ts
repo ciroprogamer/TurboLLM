@@ -115,8 +115,6 @@ import {
   startEngine,
   stopEngine,
   type DaemonSettingsPatch,
-  type HfSearchCategory,
-  type HfSearchRows,
   type McpServer,
   type CustomAgent,
   type BuiltinAgentOverride,
@@ -141,6 +139,8 @@ import type {
   EnginesList,
   UpdatePolicy,
   HfRepoDetail,
+  HfSearchCategory,
+  HfSearchRows,
   HfSortOption,
   HwUsage,
   LoadProfile,
@@ -912,13 +912,21 @@ export function useHfSearch(
   category?: HfSearchCategory,
 ): UseQueryResult<HfSearchRows> {
   return useQuery({
-    queryKey: ['hf-search', q, sort, category],
+    queryKey: hfSearchKey(q, sort, category),
     queryFn: () => hfSearch(q, sort, category),
     retry: false,
     // Previous rows stand in only within one list: across a category switch they are the other list's.
-    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[3] === category ? prev : undefined),
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[HF_SEARCH_KEY_CATEGORY] === category ? prev : undefined),
   })
 }
+
+/** A search's cache key. The category is in it because the category is a different list from the engine's. */
+function hfSearchKey(q: string, sort: HfSortOption, category: HfSearchCategory | undefined): unknown[] {
+  return ['hf-search', q, sort, category]
+}
+
+/** Where {@link hfSearchKey} puts the category. */
+const HF_SEARCH_KEY_CATEGORY = 3
 
 /** Repo detail (files + sizes + gated). Disabled until a repo is selected. While
  *  the daemon is still hashing size-matching local files (`verifying`), re-poll so

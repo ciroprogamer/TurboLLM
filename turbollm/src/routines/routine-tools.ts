@@ -186,7 +186,7 @@ export async function execCreateRoutine(
   store: RoutineToolsStore,
   isCodeAuthorized = false,
   modelExists?: (key: string) => boolean,
-  isJevModel?: (key: string) => boolean,
+  isTextClassifier?: (key: string) => boolean,
 ): Promise<string> {
   // Gate BEFORE validation, exactly as POST /api/v1/routines does (routine-routes.ts:152), so an
   // ungated caller learns nothing about the request shape from the error it gets back.
@@ -194,7 +194,7 @@ export async function execCreateRoutine(
   const typeProblem = stringFieldProblem(args)
   if (typeProblem) return `Error: ${typeProblem}`
   const b = args as unknown as RoutineBody
-  const problem = validateCreate(b, modelExists, isJevModel)
+  const problem = validateCreate(b, modelExists, isTextClassifier)
   if (problem) return `Error: ${problem}`
   const routine = store.createRoutine({
     flavor: b.flavor as RoutineFlavor,
@@ -278,7 +278,7 @@ export function execUpdateRoutine(
   args: Record<string, unknown>,
   store: RoutineToolsStore,
   isCodeAuthorized = false,
-  isJevModel?: (key: string) => boolean,
+  isTextClassifier?: (key: string) => boolean,
 ): string {
   const id = String(args.routineId ?? '').trim()
   if (!id) return 'Error: routineId is required.'
@@ -304,7 +304,7 @@ export function execUpdateRoutine(
 
   // The REST layer's own PUT validation, reused verbatim (flavor-dependent invariants re-checked
   // against the STORED flavor, plus permissionMode/codingAgent/scheduleRule) …
-  const problem = validateUpdate(patch, existing, isJevModel)
+  const problem = validateUpdate(patch, existing, isTextClassifier)
   if (problem) return `Error: ${problem}`
   // … plus the two emptiness checks PUT happens not to make. Blanking either field is never a
   // meaningful edit, and an empty modelKey would leave the routine unable to pick an engine at all.

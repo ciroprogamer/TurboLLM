@@ -94,11 +94,6 @@ export function WorkspaceModeGate() {
   return <Navigate to={redirect.to} replace state={{ takeoverNotice: redirect.notice }} />
 }
 
-/** The playground's URL before ADR-444, kept so a bookmark of it still lands on the playground. */
-export function LegacyPlaygroundRedirect() {
-  return <Navigate to={TEXT_CLASSIFICATION_PATH} replace />
-}
-
 /** Onboarding entry predicate (spec 25 §3): redirects to `/onboarding` while
  *  it is unfinished AND the install has never once loaded a model
  *  successfully — `everLoadedModel` is server-authoritative (set only from a
@@ -313,7 +308,8 @@ export function App() {
                 chat while a Laya model is (ADR-443). Inside the gate so that reaching it with no text
                 classification model loaded lands on Chat instead. */}
             <Route path={TEXT_CLASSIFICATION_PATH} element={<JevPlaygroundScreen />} />
-            <Route path={LEGACY_JEV_PATH} element={<LegacyPlaygroundRedirect />} />
+            {/* Back-compat: the playground's URL before ADR-444, so a bookmark of it still lands there. */}
+            <Route path={LEGACY_JEV_PATH} element={<Navigate to={TEXT_CLASSIFICATION_PATH} replace />} />
             </Route>
             {/* Back-compat: /chat → Workspace; /chat/:convId stays a standalone view
                 so existing LAN share links (baked as /chat/<id>) keep working. */}

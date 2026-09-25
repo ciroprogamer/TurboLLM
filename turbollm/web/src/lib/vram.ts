@@ -1,8 +1,7 @@
 // Client-side mirror of the daemon's VRAM estimate (spec 05 §6) so the load
 // form can show a live fit as the user drags sliders. Deterministic math — the
 // only number we show pre-run, always labeled an estimate (ADR-012).
-import type { HfSearchRow } from './api'
-import type { FitVerdict, LoadProfile, ModelEntry, SysGpu } from './types'
+import type { FitVerdict, HfSearchItem, LoadProfile, ModelEntry, SysGpu } from './types'
 
 const HEAD_DIM = 128
 
@@ -141,7 +140,7 @@ export function repoFitsHardware(repo: string, budgetMb: number): boolean {
  *  never hidden. The name rule sizes a Q4 GGUF quant ladder, and a classifier repo is not one:
  *  its name carries no "<N>B" token, so the rule would hide the whole category, and the daemon
  *  already lists only classifiers TurboLLM can run. */
-export function searchRowFitsHardware(row: HfSearchRow, budgetMb: number): boolean {
+export function searchRowFitsHardware(row: HfSearchItem, budgetMb: number): boolean {
   return !!row.textClassification || repoFitsHardware(row.repo, budgetMb)
 }
 

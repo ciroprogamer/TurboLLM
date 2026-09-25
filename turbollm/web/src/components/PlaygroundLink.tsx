@@ -1,6 +1,7 @@
-// The way into the text classification playground while a Laya model is loaded (ADR-443, ADR-444). A Jev model takes the whole
-// Workspace over and so needs no link; a Laya model runs beside the chat model, and the "ready" toast is gone once
-// dismissed, so the Workspace sidebar carries this for as long as one is loaded or loading.
+// The way into the text classification playground while a Laya model is loaded (ADR-443, ADR-444). A Jev
+// model takes the whole Workspace over and so needs no link; a Laya model runs beside the chat model, and the
+// "ready" toast is gone once dismissed, so the Workspace sidebar carries this for as long as one is loaded or
+// loading.
 import { ArrowRight, FlaskConical } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { track } from '../lib/api'

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ToolRegistry } from './tool-registry'
 import type { RoutineToolsStore, RunRoutineNowFn } from '../routines/routine-tools'
-import { CODE_GATE_MESSAGE, ROUTINES_DISABLED_MESSAGE, JEV_ROUTINE_MODEL_MESSAGE } from '../routines/routine-routes'
+import { CODE_GATE_MESSAGE, ROUTINES_DISABLED_MESSAGE, TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE } from '../routines/routine-routes'
 import type { Routine } from '../routines/schema'
 import type { ToolsConfig, CustomChatAgent } from '../config/config'
 import { ConversationStore } from '../chat/db'
@@ -356,7 +356,7 @@ test('executeTool: list_models routes to the injected model store and returns th
 
 // The registry is what wires the predicate in, so a chat/Code tool call gets the same
 // refusal the REST route gives.
-function modelsStoreWithJev(): ModelToolsStore {
+function modelsStoreWithClassifiers(): ModelToolsStore {
   return {
     list: () => ({ models: [
       { key: 'm', name: 'm', quant: 'Q4_K_M', sizeLabel: '8B' },
@@ -369,28 +369,28 @@ function modelsStoreWithJev(): ModelToolsStore {
 test('executeTool(create_routine): a Laya modelKey is refused like a Jev one — both are text classification', async () => {
   let created = 0
   const routines = { ...fakeStore(null), createRoutine: () => { created++; return fakeRoutine() } } as unknown as RoutineToolsStore
-  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithJev())
+  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithClassifiers())
 
   const out = await reg.executeTool({ id: 't1', name: 'create_routine', args: {
     flavor: 'chat', prompt: 'x', scheduleDisplay: 'd', scheduleRule: { kind: 'interval', everyMs: 60_000 },
     modelKey: 'laya|laya|1455', agentId: 'a',
   } })
 
-  assert.equal(out, `Error: ${JEV_ROUTINE_MODEL_MESSAGE('laya|laya|1455')}`)
+  assert.equal(out, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE('laya|laya|1455')}`)
   assert.equal(created, 0)
 })
 
 test('executeTool(create_routine): a Jev modelKey is refused and createRoutine is never called', async () => {
   let created = 0
   const routines = { ...fakeStore(null), createRoutine: () => { created++; return fakeRoutine() } } as unknown as RoutineToolsStore
-  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithJev())
+  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithClassifiers())
 
   const out = await reg.executeTool({ id: 't1', name: 'create_routine', args: {
     flavor: 'chat', prompt: 'x', scheduleDisplay: 'd', scheduleRule: { kind: 'interval', everyMs: 60_000 },
     modelKey: 'jev-fake-v2', agentId: 'a',
   } })
 
-  assert.equal(out, `Error: ${JEV_ROUTINE_MODEL_MESSAGE('jev-fake-v2')}`)
+  assert.equal(out, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE('jev-fake-v2')}`)
   assert.equal(created, 0)
 })
 
@@ -398,18 +398,18 @@ test('executeTool(update_routine): a Jev modelKey is refused and updateRoutine i
   let updated = 0
   const routine = fakeRoutine()
   const routines = { ...fakeStore(routine), updateRoutine: () => { updated++; return routine } } as unknown as RoutineToolsStore
-  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithJev())
+  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithClassifiers())
 
   const out = await reg.executeTool({ id: 't1', name: 'update_routine', args: { routineId: routine.id, modelKey: 'jev-fake-v2', confirm: true } })
 
-  assert.equal(out, `Error: ${JEV_ROUTINE_MODEL_MESSAGE('jev-fake-v2')}`)
+  assert.equal(out, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE('jev-fake-v2')}`)
   assert.equal(updated, 0)
 })
 
 test('executeTool(create_routine): a chat modelKey still creates the routine', async () => {
   let created = 0
   const routines = { ...fakeStore(null), createRoutine: () => { created++; return fakeRoutine() } } as unknown as RoutineToolsStore
-  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithJev())
+  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithClassifiers())
 
   const out = await reg.executeTool({ id: 't1', name: 'create_routine', args: {
     flavor: 'chat', prompt: 'x', scheduleDisplay: 'd', scheduleRule: { kind: 'interval', everyMs: 60_000 },

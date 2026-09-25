@@ -4,14 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DiscoverTab } from './DiscoverTab'
-import type { HfSearchCategory, HfSearchRow } from '../../lib/api'
+import type { HfSearchCategory, HfSearchItem } from '../../lib/types'
 
 const CATEGORY_DESCRIPTION = 'Laya and Jev models TurboLLM can run, whichever engine is active'
 
 const state: {
   sys: { os: string; ramMB: number; gpus: { name: string; vramMb: number }[] }
-  engineRows: HfSearchRow[]
-  categoryRows: HfSearchRow[]
+  engineRows: HfSearchItem[]
+  categoryRows: HfSearchItem[]
   searchedCategories: (HfSearchCategory | undefined)[]
 } = { sys: desktop(), engineRows: [], categoryRows: [], searchedCategories: [] }
 
@@ -42,7 +42,7 @@ function phone() {
   return { os: 'android/arm64', ramMB: 7655, gpus: [] }
 }
 
-function row(repo: string, textClassification?: HfSearchRow['textClassification']): HfSearchRow {
+function row(repo: string, textClassification?: HfSearchItem['textClassification']): HfSearchItem {
   return { repo, downloads: 1200, likes: 30, updatedAt: '', gated: false, tags: [], localCount: 0, textClassification }
 }
 
@@ -136,5 +136,27 @@ describe('DiscoverTab — Text classification category', () => {
     await userEvent.click(categoryToggle())
     await userEvent.click(resultRow('convaiinnovations/laya'))
     expect(screen.getByText('Details of convaiinnovations/laya')).toBeInTheDocument()
+  })
+})
+
+describe('DiscoverTab — an empty list', () => {
+  it('says the engine search found nothing', () => {
+    state.engineRows = []
+    render(<DiscoverTab />)
+    expect(screen.getByText('No models found.')).toBeInTheDocument()
+  })
+
+  it('names the query that found nothing', async () => {
+    state.engineRows = []
+    render(<DiscoverTab />)
+    await userEvent.type(screen.getByPlaceholderText('Search models by name or author…'), 'nothing-here')
+    expect(await screen.findByText('No models found for “nothing-here”.')).toBeInTheDocument()
+  })
+
+  it('says the fit filter hid every result, rather than that there were none', () => {
+    state.sys = phone()
+    state.engineRows = [row('unsloth/Qwen3.6-35B-A3B-GGUF')]
+    render(<DiscoverTab />)
+    expect(screen.getByText(/None of the 1 results fit this machine's memory/)).toBeInTheDocument()
   })
 })

@@ -5,7 +5,7 @@
 // root's `tsx --test`. New web tests are Vitest, so they go in their own file rather than
 // dragging vram.test.ts across runners.
 import { describe, expect, test } from 'vitest'
-import type { HfSearchRow } from './api'
+import type { HfSearchItem } from './types'
 import { fitBudgetMb, repoFitsHardware, repoFitVerdict, repoParamsB, searchRowFitsHardware } from './vram'
 
 describe('repoParamsB', () => {
@@ -127,7 +127,7 @@ describe('repoFitsHardware', () => {
 describe('searchRowFitsHardware', () => {
   const phone = fitBudgetMb({ os: 'android/arm64', ramMB: 7655, gpus: [] })
 
-  function row(repo: string, textClassification?: HfSearchRow['textClassification']): HfSearchRow {
+  function row(repo: string, textClassification?: HfSearchItem['textClassification']): HfSearchItem {
     return { repo, downloads: 0, likes: 0, updatedAt: '', gated: false, tags: [], localCount: 0, textClassification }
   }
 

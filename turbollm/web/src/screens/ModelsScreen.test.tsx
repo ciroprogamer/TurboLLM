@@ -203,6 +203,14 @@ describe('ModelsScreen — Jev models', () => {
     expect(screen.getByRole('button', { name: 'Load' }).getAttribute('title')).toBe('Needs vLLM (Linux or WSL2)')
   })
 
+  // A Laya model never loads on the active engine, so "switch to" would send the user the wrong way.
+  it('tells a Laya model with no Laya engine to install one', () => {
+    state.models = [layaEntry({ compatibleWithActiveEngine: false, incompatibleReason: 'Needs the Laya engine' })]
+    renderScreen()
+    expect(screen.getByRole('button', { name: 'Load' }).getAttribute('title'))
+      .toBe('Install the Laya engine (Engines) to load this model.')
+  })
+
   it('never labels a Jev model "no chat template" — it never chats', () => {
     state.models = [jevEntry({ hasChatTemplate: false })]
     renderScreen()

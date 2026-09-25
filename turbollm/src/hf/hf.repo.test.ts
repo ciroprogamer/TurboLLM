@@ -15,16 +15,16 @@ interface TreeEntry {
   lfs?: { oid?: string; size?: number }
 }
 
-/** Stub global.fetch: the repo-info endpoint returns a minimal safetensors-repo payload,
+/** Stub global.fetch: the repo-info endpoint returns a minimal safetensors-repo payload (or `info`),
  *  the tree endpoint returns the given entries. */
-function withRepo(tree: TreeEntry[], fn: () => Promise<void>): Promise<void> {
+function withRepo(tree: TreeEntry[], fn: () => Promise<void>, info: object = {}): Promise<void> {
   const real = globalThis.fetch
   globalThis.fetch = (async (url: string | URL) => {
     const u = String(url)
     if (u.includes('/tree/')) {
       return new Response(JSON.stringify(tree), { status: 200, headers: { 'content-type': 'application/json' } })
     }
-    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    return new Response(JSON.stringify(info), { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
   return fn().finally(() => {
     globalThis.fetch = real
@@ -87,7 +87,21 @@ test('getRepo: a Laya repo is marked laya and lists its nested checkpoint files,
     assert.ok(detail.files.some((f) => f.name === 'multilingual/model.safetensors'))
     assert.ok(detail.files.some((f) => f.name === 'encoder/config.json'))
     assert.ok(!detail.files.some((f) => f.name === 'README.md'))
-  })
+  }, { library_name: 'transformers' })
+})
+
+// The category and the engine-adapted search already leave the MLX port out (ADR-443 (8)); opening it by address must
+// not offer it as a Laya download either.
+test('getRepo: a Laya-shaped MLX port is not marked laya, so it cannot be downloaded as a Laya model', async () => {
+  const tree: TreeEntry[] = [
+    { type: 'file', path: 'rl_agent_config.json', size: 5 },
+    { type: 'file', path: 'mlx_config.json', size: 5 },
+    { type: 'file', path: 'model.safetensors', lfs: { oid: 'mlx', size: 808 } },
+    { type: 'file', path: 'encoder/config.json', size: 20 },
+  ]
+  await withRepo(tree, async () => {
+    assert.equal((await client().getRepo('aac6fef/laya-mlx')).laya, undefined)
+  }, { library_name: 'mlx' })
 })
 
 test('getRepo: an ordinary safetensors repo is not marked laya', async () => {

@@ -1,10 +1,10 @@
 // Discover's "Text classification" category (ADR-444): every repo TurboLLM can run as a classifier, whichever engine
-// is active. A Laya bundle is known from its file names alone; an NLI cross-encoder only from its own config.json,
-// which detectJev reads (ADR-436 (1)). The listing gives file names and the root config's architectures for free.
+// is active. A Laya bundle is known from its file names and library tag alone; an NLI cross-encoder only from its own
+// config.json, which detectJev reads (ADR-436 (1)). The listing gives file names and the root config's architectures for free.
 import { detectJev } from '../models/jev'
 import { checkpointDirs } from './checkpoints'
 import type { HfSortOption, RawSearchItem, RawTreeEntry } from './hf'
-import { isLayaRepo } from './laya-repo'
+import { isLayaEngineRepo, isLayaRepo } from './laya-repo'
 
 /** One row of HF's model list, with the file names and root config the category is judged from. */
 export interface ListedModel extends RawSearchItem {
@@ -100,7 +100,7 @@ function descending(a: number | string, b: number | string): number {
  *  it. */
 export function textClassificationCandidate(model: ListedModel): TextClassificationCandidate | undefined {
   const files = listedFiles(model)
-  if (isLayaRepo(files)) return { model, runtime: 'laya' }
+  if (isLayaRepo(files)) return isLayaEngineRepo(model) ? { model, runtime: 'laya' } : undefined
   const configDir = classifierCheckpointDir(model, files)
   return configDir === undefined ? undefined : { model, runtime: 'vllm', configDir }
 }

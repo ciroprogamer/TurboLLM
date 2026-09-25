@@ -6,11 +6,12 @@ import { test } from 'node:test'
 import { HfClient } from './hf'
 import { mergeListings, textClassificationCandidate, type ListedModel } from './text-classification-search'
 
-function listed(id: string, files: string[], architectures?: string[]): ListedModel {
+function listed(id: string, files: string[], architectures?: string[], library_name?: string): ListedModel {
   return {
     id,
     siblings: files.map((rfilename) => ({ rfilename })),
     config: architectures ? { architectures } : {},
+    ...(library_name ? { library_name } : {}),
   }
 }
 
@@ -28,9 +29,27 @@ const OPENJEV_FILES = [
 ]
 
 test('a repo with the Laya decision-head config and weights at its root is a Laya candidate, from its file names alone', () => {
-  const laya = listed('convaiinnovations/laya', LAYA_FILES)
+  const laya = listed('convaiinnovations/laya', LAYA_FILES, undefined, 'transformers')
 
   assert.deepEqual(textClassificationCandidate(laya), { model: laya, runtime: 'laya' })
+})
+
+test('a Laya repo published with its own library tag is a Laya candidate too', () => {
+  const native = listed('telepatia-ai/laya-pt-es-typed', LAYA_FILES, undefined, 'laya')
+
+  assert.deepEqual(textClassificationCandidate(native), { model: native, runtime: 'laya' })
+})
+
+// The same rule as the engine-adapted search (ADR-443 (8)): a Laya-shaped folder in another library, such as the MLX
+// port, has the right file names and cannot be run by the PyTorch Laya engine.
+test('a Laya-shaped MLX port is no candidate: the Laya engine cannot load it', () => {
+  const mlxPort = listed('aac6fef/laya-mlx', [...LAYA_FILES, 'mlx_config.json'], undefined, 'mlx')
+
+  assert.equal(textClassificationCandidate(mlxPort), undefined)
+})
+
+test('a Laya-shaped repo that names no library is no candidate', () => {
+  assert.equal(textClassificationCandidate(listed('someone/laya-finetune', LAYA_FILES)), undefined)
 })
 
 test('a root sequence classifier is an NLI candidate whose own root config gets checked', () => {
@@ -144,7 +163,7 @@ const NLI_LABELS = { 0: 'entailment', 1: 'neutral', 2: 'contradiction' }
 const nliConfig = (architecture = 'DebertaV2ForSequenceClassification') => ({ architectures: [architecture], id2label: NLI_LABELS })
 const SENTIMENT_CONFIG = { architectures: ['RobertaForSequenceClassification'], id2label: { 0: 'negative', 1: 'neutral', 2: 'positive' } }
 
-const LAYA = listed('convaiinnovations/laya', LAYA_FILES)
+const LAYA = listed('convaiinnovations/laya', LAYA_FILES, undefined, 'transformers')
 const OPENJEV = listed('AlexWortega/openjev', OPENJEV_FILES)
 const rootClassifier = (id: string, extra: Partial<ListedModel> = {}) =>
   ({ ...listed(id, ROOT_CHECKPOINT, ['DebertaV2ForSequenceClassification']), ...extra })

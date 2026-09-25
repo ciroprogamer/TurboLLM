@@ -4,11 +4,17 @@
 // the Laya engine routes between; typed-decisions is fine-tuned for four fixed workflows and is never chosen
 // automatically, so it is not downloaded.
 import { toRepoFile } from './checkpoints'
-import type { HfRepoFile, RawTreeEntry } from './hf'
+import type { HfRepoFile, RawSearchItem, RawTreeEntry } from './hf'
 
 const CHECKPOINT_DIRS = ['', 'multilingual/']
 const CHECKPOINT_FILES = ['rl_agent_config.json', 'model.safetensors']
 const CHECKPOINT_FOLDERS = ['encoder/', 'tokenizer/']
+
+/** A Laya-tagged repo the Laya engine can run: a transformers/laya checkpoint, not an MLX, CoreML, ONNX or ggmlc
+ *  GGUF port. Whether its folder really is a Laya bundle is decided by {@link isLayaRepo}. */
+export function isLayaEngineRepo(m: Pick<RawSearchItem, 'library_name'>): boolean {
+  return m.library_name === 'transformers' || m.library_name === 'laya'
+}
 
 /** A Laya repo has the decision-head config and the weights at its root. */
 export function isLayaRepo(tree: readonly RawTreeEntry[]): boolean {

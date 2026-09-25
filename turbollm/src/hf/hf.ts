@@ -6,7 +6,7 @@
 import { quantFromName } from '../gguf/gguf'
 import { detectJev } from '../models/jev'
 import { findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES, type HfCheckpoint } from './checkpoints'
-import { isLayaRepo, layaRepoFiles } from './laya-repo'
+import { isLayaEngineRepo, isLayaRepo, layaRepoFiles } from './laya-repo'
 import {
   findTextClassificationRepos,
   type ListedModel,
@@ -70,12 +70,6 @@ function libraryFilterFor(engineKind?: string): string {
   if (engineKind === 'mlx' || engineKind === 'rapid-mlx' || engineKind === 'mlx-vlm') return 'filter=mlx&'
   if (engineKind === 'vllm') return ''
   return 'filter=gguf&'
-}
-
-/** A Laya-tagged repo the Laya engine can run: a transformers/laya checkpoint, not an MLX, CoreML, ONNX or ggmlc
- *  GGUF port. Whether its folder really is a Laya bundle is decided when it is opened (laya-repo.ts). */
-function isLayaEngineRepo(m: RawSearchItem): boolean {
-  return m.library_name === 'transformers' || m.library_name === 'laya'
 }
 
 function repoIdOf(m: RawSearchItem): string {
@@ -225,7 +219,7 @@ export class HfClient {
     let files: HfRepoFile[]
     let safetensors: boolean | undefined
     let checkpoints: HfCheckpoint[] | undefined
-    const laya = isSafetensors && isLayaRepo(tree)
+    const laya = isSafetensors && isLayaRepo(tree) && isLayaEngineRepo(info)
     if (laya) {
       safetensors = true
       files = layaRepoFiles(tree, (path) => this.fileUrl(repo, path))
@@ -528,6 +522,7 @@ export interface RawSearchItem {
 }
 
 interface RawRepoInfo {
+  library_name?: string
   downloads?: number
   likes?: number
   gated?: boolean | string

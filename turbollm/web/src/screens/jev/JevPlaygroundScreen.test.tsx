@@ -846,6 +846,13 @@ describe('JevPlaygroundScreen with nothing loaded', () => {
     expect(screen.queryByRole('button', { name: 'Run' })).toBeNull()
   })
 
+  it('announces the empty state and centres it in the pane, as the chat screen does', () => {
+    renderScreen()
+    const emptyState = screen.getByRole('status')
+    expect(emptyState).toHaveTextContent('No text classification model is loaded.')
+    expect(emptyState).toHaveClass('items-center', 'justify-center', 'text-center')
+  })
+
   it('lists the library\'s text classification models to load, and no chat model', () => {
     renderScreen()
     expect(within(modelList()).getByRole('button', { name: 'Load laya' })).toBeInTheDocument()

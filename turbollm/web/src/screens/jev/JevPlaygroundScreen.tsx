@@ -252,7 +252,7 @@ function PlaygroundColumns({ modelList, children }: { modelList: ReactNode; chil
 function NothingLoaded({ modelList }: { modelList: ReactNode }) {
   const isDesktop = useIsDesktop()
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4">
+    <div role="status" className="mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-3 px-4 py-10 text-center">
       <div className="flex flex-col gap-1">
         <p className="text-[13px] text-ink">No text classification model is loaded.</p>
         <p className="text-[13px] text-muted">Load one from the list to try it.</p>
@@ -260,7 +260,7 @@ function NothingLoaded({ modelList }: { modelList: ReactNode }) {
       <Link to={DISCOVER_PATH} className="w-fit text-[13px] text-accent hover:underline">
         Find one in Discover
       </Link>
-      {!isDesktop && <div className="rounded-md border border-border">{modelList}</div>}
+      {!isDesktop && <div className="w-full rounded-md border border-border text-left">{modelList}</div>}
     </div>
   )
 }

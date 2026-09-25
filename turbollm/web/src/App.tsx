@@ -75,9 +75,9 @@ function CodeGate({ children }: { children: ReactNode }) {
 /** ADR-434 (b), (i)(1): a Jev model is an NLI classifier, not a chat model — it cannot answer a
  *  chat, a Code turn or a routine at all. So while one is loaded, Workspace collapses to its one
  *  usable surface, and every other Workspace route redirects into the playground carrying the
- *  notice that says why. It works in reverse too: with no text classification model loaded, the
- *  playground's own URL goes back to Chat (a bookmark, or the page you were on when the model was
- *  ejected). A Laya model opens the playground without taking the Workspace over (ADR-443).
+ *  notice that says why. It works in reverse too: with no text classification model loaded and none
+ *  in the library to load, the playground's own URL goes back to Chat (ADR-444, amended 2026-09-25).
+ *  A Laya model opens the playground without taking the Workspace over (ADR-443).
  *
  *  A pathless layout route rather than a per-route wrapper: the rule is about the whole
  *  /workspace/* section, and declaring it once is what stops a route added later from quietly
@@ -306,7 +306,7 @@ export function App() {
             <Route path="/workspace/agent/:convId" element={<Navigate to="/workspace/chat" replace />} />
             {/* Workspace's only mode while a Jev model is loaded (ADR-434 (b)), and a page beside
                 chat while a Laya model is (ADR-443). Inside the gate so that reaching it with no text
-                classification model loaded lands on Chat instead. */}
+                classification model loaded or in the library lands on Chat instead. */}
             <Route path={TEXT_CLASSIFICATION_PATH} element={<JevPlaygroundScreen />} />
             {/* Back-compat: the playground's URL before ADR-444, so a bookmark of it still lands there. */}
             <Route path={LEGACY_JEV_PATH} element={<Navigate to={TEXT_CLASSIFICATION_PATH} replace />} />

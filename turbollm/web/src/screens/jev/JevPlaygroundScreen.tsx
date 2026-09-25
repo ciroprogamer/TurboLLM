@@ -1,23 +1,29 @@
 // The text classification playground (ADR-444) — the Workspace's only surface while a Jev model is
-// loaded (ADR-434 (b), (c), (i)(1), (i)(5)) and a page beside chat while a Laya model is (ADR-443),
-// rebuilt as the System One request itself (ADR-439): the two JSON editors ARE the body that gets
-// posted, and the answers sit beside them.
+// loaded (ADR-434 (b), (c), (i)(1), (i)(5)) and a Workspace tab beside chat while a Laya model is, or
+// while the library merely holds one (ADR-443; ADR-444, amended 2026-09-25). Rebuilt as the System
+// One request itself (ADR-439): the two JSON editors ARE the body that gets posted, and the answers
+// sit beside them.
 //
-// It holds no conversation, no history and no sidebar: there is exactly one thing to do here.
-import { useEffect, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+// It holds no conversation and no history. Its left column is the Workspace's own: the mode control
+// and the library's text classification models, so the page is a starting point, not only a destination.
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Link, useLocation } from 'react-router-dom'
+import { WorkspaceModeTabs } from '../../components/WorkspaceModeTabs'
 import { Button } from '../../components/ui/button'
 import { ApiError, stopEngine, track } from '../../lib/api'
 import { systemone } from '../../lib/jev-api'
+import { hasTextClassifier } from '../../lib/jev-mode'
 import { useModelLoader } from '../../lib/model-loader'
 import { useModels, useStatus } from '../../lib/queries'
 import { loadedSystemOneModel } from '../../lib/systemone-model'
 import type { LoadedJev, ModelEntry, Status } from '../../lib/types'
+import { useIsDesktop } from '../../lib/useIsDesktop'
 import { AnswerList } from './AnswerList'
 import { JevHeader } from './JevHeader'
 import { JsonEditor } from './JsonEditor'
 import { ResponsePanel, type SystemOneRun } from './ResponsePanel'
-import { SwitchModelMenu, switchToModel } from './SwitchModelMenu'
+import { SwitchModelMenu, ejectModel, switchToModel } from './SwitchModelMenu'
+import { TextClassificationModelList } from './TextClassificationModelList'
 import { draftRequest, type DraftProblem, type SystemOneDraft } from './systemone-draft'
 import { SYSTEMONE_EXAMPLES } from './systemone-examples'
 
@@ -26,11 +32,13 @@ const NOTICE = 'Chat, Code and Routines are unavailable while a text classificat
 const DRAFT_STORAGE_KEY = 'tllm.jev.systemone.draft'
 const DRAFT_SAVE_DELAY_MS = 400
 
+const DISCOVER_PATH = '/models?tab=discover'
+
 export function JevPlaygroundScreen() {
   const statusQ = useStatus()
   const modelsQ = useModels()
   const location = useLocation()
-  const { requestLoad } = useModelLoader()
+  const { requestLoad, pendingKey } = useModelLoader()
 
   const models = modelsQ.data?.models
   const jev = loadedSystemOneModel(statusQ.data, models)
@@ -89,9 +97,29 @@ export function JevPlaygroundScreen() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  if (!jev) return null
-  // The handlers below are hoisted past the guard, so they need the narrowed value by name.
-  const current = jev
+  // Nothing to catch: a refused eject and a refused load both report themselves as a toast.
+  function loadModel(m: ModelEntry) {
+    void switchToModel(jev, m, { stopEngine, requestLoad })
+  }
+
+  const modelList = (
+    <TextClassificationModelList
+      models={models ?? []}
+      current={jev}
+      pendingKey={pendingKey}
+      onLoad={loadModel}
+      onEject={(m) => void ejectModel(m, { stopEngine })}
+    />
+  )
+
+  if (!jev) {
+    if (!hasTextClassifier(statusQ.data, models)) return null
+    return (
+      <PlaygroundColumns modelList={modelList}>
+        <NothingLoaded modelList={modelList} />
+      </PlaygroundColumns>
+    )
+  }
 
   const drafted = draftRequest(jev.key, draft)
   const problems = drafted.ok ? [] : drafted.problems
@@ -116,12 +144,11 @@ export function JevPlaygroundScreen() {
 
   function pickModel(m: ModelEntry) {
     setSwitchOpen(false)
-    // Nothing to catch: a refused eject and a refused load both report themselves as a toast.
-    void switchToModel(current, m, { stopEngine, requestLoad })
+    loadModel(m)
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <PlaygroundColumns modelList={modelList}>
       <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4">
         {(location.state as { takeoverNotice?: boolean } | null)?.takeoverNotice && (
           <p className="text-[13px] text-muted">{NOTICE}</p>
@@ -190,6 +217,50 @@ export function JevPlaygroundScreen() {
           </section>
         </div>
       </div>
+    </PlaygroundColumns>
+  )
+}
+
+/** The playground's place in the Workspace: on a desktop, the same left column as the other Workspace modes; on a
+ *  phone, where there is no room for one, the mode control on top and the model list behind Switch model. */
+function PlaygroundColumns({ modelList, children }: { modelList: ReactNode; children: ReactNode }) {
+  const isDesktop = useIsDesktop()
+  if (!isDesktop) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <div className="px-4 pt-4">
+          <WorkspaceModeTabs />
+        </div>
+        {children}
+      </div>
+    )
+  }
+  return (
+    <div className="flex h-full overflow-hidden">
+      <div className="flex w-56 shrink-0 flex-col border-r border-border bg-panel-2">
+        <div className="px-3 pt-3">
+          <WorkspaceModeTabs />
+        </div>
+        {modelList}
+      </div>
+      <div className="min-w-0 flex-1 overflow-y-auto">{children}</div>
+    </div>
+  )
+}
+
+/** With nothing loaded there is no header and so no Switch model on a phone: the list moves into the page. */
+function NothingLoaded({ modelList }: { modelList: ReactNode }) {
+  const isDesktop = useIsDesktop()
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4">
+      <div className="flex flex-col gap-1">
+        <p className="text-[13px] text-ink">No text classification model is loaded.</p>
+        <p className="text-[13px] text-muted">Load one from the list to try it.</p>
+      </div>
+      <Link to={DISCOVER_PATH} className="w-fit text-[13px] text-accent hover:underline">
+        Find one in Discover
+      </Link>
+      {!isDesktop && <div className="rounded-md border border-border">{modelList}</div>}
     </div>
   )
 }

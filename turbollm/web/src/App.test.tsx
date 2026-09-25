@@ -30,6 +30,8 @@ const JEV = {
   slot: 'primary',
 } as NonNullable<Status['jev']>
 
+const CHAT_MODEL = { key: 'gemma-27b', name: 'Gemma 27B', loaded: true } as ModelEntry
+
 function Probe() {
   const loc = useLocation()
   return <div data-testid="landed">{`${loc.pathname} ${JSON.stringify(loc.state)}`}</div>
@@ -77,6 +79,7 @@ describe('WorkspaceModeGate', () => {
 
   it('sends the playground back to Chat once nothing Jev is loaded, without an explanation', () => {
     state.status = { jev: null } as Status
+    state.models = []
     expect(landOn('/workspace/text-classification')).toBe('/workspace/chat {"takeoverNotice":false}')
   })
 
@@ -125,9 +128,34 @@ describe('WorkspaceModeGate with the text classification status', () => {
     expect(landOn('/workspace/text-classification')).toBe('/workspace/text-classification null')
   })
 
-  it('sends the playground back to Chat when it reports nothing loaded', () => {
+  it('sends the playground back to Chat when it reports nothing loaded and the library holds none', () => {
     state.status = { textClassification: null, jev: JEV } as unknown as Status
+    state.models = [CHAT_MODEL]
     expect(landOn('/workspace/text-classification')).toBe('/workspace/chat {"takeoverNotice":false}')
+  })
+})
+
+// ADR-444, amended 2026-09-25: the playground is a Workspace tab, a starting point, so it stays open with nothing
+// loaded as long as the library holds a text classification model to load from its list.
+describe('WorkspaceModeGate with nothing loaded', () => {
+  const NOTHING_LOADED = { textClassification: null, jev: null, laya: null } as unknown as Status
+  const LIBRARY_LAYA = { key: 'laya-key', name: 'laya', loaded: false, laya: { checkpoints: ['english'] } } as unknown as ModelEntry
+
+  it('keeps the playground open while the library holds a text classification model', () => {
+    state.status = NOTHING_LOADED
+    state.models = [CHAT_MODEL, LIBRARY_LAYA]
+    expect(landOn('/workspace/text-classification')).toBe('/workspace/text-classification null')
+  })
+
+  it('waits for the library before sending the playground back to Chat', () => {
+    state.status = NOTHING_LOADED
+    expect(landOn('/workspace/text-classification')).toBe('/workspace/text-classification null')
+  })
+
+  it('leaves chat alone', () => {
+    state.status = NOTHING_LOADED
+    state.models = [CHAT_MODEL, LIBRARY_LAYA]
+    expect(landOn('/workspace/chat/abc')).toBe('/workspace/chat/abc null')
   })
 })
 
@@ -137,8 +165,9 @@ describe('the playground\'s old Jev URL', () => {
     expect(landOn('/workspace/jev')).toBe('/workspace/text-classification null')
   })
 
-  it('still ends on Chat when nothing is loaded', () => {
+  it('still ends on Chat when nothing is loaded and the library holds none', () => {
     state.status = { jev: null } as Status
+    state.models = [CHAT_MODEL]
     expect(landOn('/workspace/jev')).toBe('/workspace/chat {"takeoverNotice":false}')
   })
 })

@@ -389,7 +389,7 @@ there. Entirely local; nothing leaves your machine.
 - **Laya decision models, too** ([convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya)):
   - What it is: a calibrated System One model that answers the same `/v1/systemone` questions in 100+ languages.
   - Where it runs: on its own Laya engine (Engines page; Windows, macOS, Linux; CPU or GPU), beside your chat model.
-  - How to get it: switch on the Text classification chip in Discover, or search "laya". The same playground opens from the Workspace sidebar while it is loaded.
+  - How to get it: switch on the Text classification chip in Discover, or search "laya". The same playground opens from the Text classification tab under Chat, Code and Routines.
   - Overview of both: <https://turbollm.dev/docs/text-classification>.
 
 </details>

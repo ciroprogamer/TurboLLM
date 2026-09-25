@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { AlarmClock, Archive, ArchiveRestore, ChevronDown, ChevronLeft, ChevronRight, Circle, Download, Folder as FolderIcon, FolderInput, FolderPlus, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, SquareTerminal, Trash2 } from 'lucide-react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Archive, ArchiveRestore, ChevronDown, ChevronLeft, ChevronRight, Circle, Download, Folder as FolderIcon, FolderInput, FolderPlus, Loader2, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import type { Conversation, Folder } from '../../lib/chat-types'
 import { useConversationMutations, useConversations, useFolders } from '../../lib/chat-queries'
 import { Button } from '../../components/ui/button'
-import { PlaygroundLink } from '../../components/PlaygroundLink'
+import { WorkspaceModeTabs } from '../../components/WorkspaceModeTabs'
 import { Input } from '../../components/ui/input'
 import { toast } from '../../components/ui/sonner'
 import {
@@ -25,16 +25,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu'
-import { cn, folderName, readLastChatConvId, readLastCodeSessionId } from '../../lib/utils'
+import { cn, folderName } from '../../lib/utils'
 import { Skeleton } from '../../components/ui/skeleton'
 import { useArchiveCodeSession, useCodeSessionRename, useCodeSessions, useDeleteCodeSession } from '../../lib/code-queries'
-import { useCodeFeatureEnabled } from '../../lib/platform'
 import type { CodeSession, CodeSessionFilter, SessionStatus } from '../../lib/code-types'
 import { ApiError, track } from '../../lib/api'
 import { useRoutinesWithLatestRun, type RoutineWithLatestRun } from '../../lib/routine-queries'
 import { deriveRoutineDisplayStatus } from '../../lib/routine-status'
 import { RoutineStatusBadge } from '../../components/routines/RoutineStatusBadge'
-import { useSettings } from '../../lib/queries'
 
 /** localStorage key for the client-only "confirm before deleting a conversation"
  *  preference (mirrors SettingsScreen). Default ON when unset. */
@@ -390,28 +388,9 @@ export function ConversationSidebar({
     : pathname.startsWith('/workspace/code') ? 'code' : 'chat'
   const isCodeMode = mode === 'code'
   const isRoutinesMode = mode === 'routines'
-  // Routines is experimental, off by default (Settings → Experimental) — the mode tab itself is
-  // the "hidden" half of "hidden UI + can't be created from chat or code"; App.tsx's own gate on
-  // the /workspace/routines* routes is what stops a stale link or typed URL from reaching
-  // `isRoutinesMode` in the first place, so this file never needs to fall back out of it.
-  const routinesEnabled = useSettings().query.data?.experimental?.routines ?? false
-  // Code is cut from the Android release (platform.ts). Same shape as `routinesEnabled` right
-  // above — the tab is omitted, and App.tsx's route gate is what keeps `isCodeMode` from being
-  // reachable at all there, so nothing below needs an Android branch of its own. `=== true`
-  // rather than a truthy check is load-bearing: the hook's third state is "sysinfo hasn't
-  // answered yet", and rendering the tab through that window would flash Code onto the Android
-  // app and then remove it. Costs desktop one beat before the tab appears; see the hook's
-  // header for why that trade goes this way.
-  const codeEnabled = useCodeFeatureEnabled() === true
-  // Switching modes restores whatever conversation/session was last open in the OTHER
-  // mode, instead of always resetting to that mode's list/launchpad root. Routines has no
-  // such memory yet — it always lands on the list, same as a first-ever visit to Chat/Code
-  // would if lastChatConvId/lastCodeSessionId were never set.
-  const lastChatConvId = readLastChatConvId()
-  const chatModeHref = lastChatConvId ? `/workspace/chat/${lastChatConvId}` : '/workspace/chat'
-  const lastCodeSessionId = readLastCodeSessionId()
-  const codeModeHref = lastCodeSessionId ? `/workspace/code/${lastCodeSessionId}` : '/workspace/code'
-  const routinesModeHref = '/workspace/routines'
+  // App.tsx's route gates keep a hidden Routines or Code (experimental flag, Android) from ever
+  // reaching `isRoutinesMode`/`isCodeMode`, and WorkspaceModeTabs omits their tabs, so nothing
+  // below needs a branch of its own for either.
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   // Conversation queued for a confirmation dialog (null = dialog closed).
@@ -540,18 +519,6 @@ export function ConversationSidebar({
   // currently-generating conversation.
   const pendingIsActiveGenerating = !!pendingDelete && pendingDelete.id === activeId && !!generating
 
-  // Data-driven mode switch — was two copy-pasted Chat/Code blocks (one per render form,
-  // collapsed rail vs. expanded pill); adding Routines as a genuine third tab as a THIRD
-  // copy-pasted block would have kept the exact "looks bolted on" problem this fixes, just with
-  // one more repetition of it. `label` doubles as the accessible name AND the visible text.
-  const modeTabs: { mode: 'chat' | 'code' | 'routines'; href: string; label: string; icon: typeof MessageSquare }[] = [
-    { mode: 'chat', href: chatModeHref, label: 'Chat', icon: MessageSquare },
-    // Omitted entirely on Android (feature cut there) — same treatment as Routines below.
-    ...(codeEnabled ? [{ mode: 'code' as const, href: codeModeHref, label: 'Code', icon: SquareTerminal }] : []),
-    // Omitted entirely (not just disabled) while the experimental flag is off — see
-    // `routinesEnabled`'s own comment above.
-    ...(routinesEnabled ? [{ mode: 'routines' as const, href: routinesModeHref, label: 'Routines', icon: AlarmClock }] : []),
-  ]
   const newLabel = mode === 'code' ? 'New session' : mode === 'routines' ? 'New routine' : 'New chat (Ctrl+N)'
   const NewIcon = mode === 'chat' ? MessageSquarePlus : Plus
   // One shared action per mode rather than a single generic "new" — the founder wants
@@ -569,24 +536,7 @@ export function ConversationSidebar({
             <ChevronRight size={15} />
           </Button>
         )}
-        {/* Mode switch (Chat|Code|Routines), collapsed-rail icon form — same active/inactive
-            treatment as the app's own NavRail (Shell.tsx), since these read as nav-adjacent
-            icons here rather than a horizontal pill. */}
-        {modeTabs.map(({ mode: m, href, label, icon: Icon }) => (
-          <Link
-            key={m}
-            to={href}
-            title={label}
-            aria-current={mode === m ? 'page' : undefined}
-            className={cn(
-              'grid h-7 w-7 place-items-center rounded-md transition-colors',
-              mode === m ? 'bg-accent/12 text-accent' : 'text-muted hover:bg-panel hover:text-ink',
-            )}
-          >
-            <Icon size={15} />
-          </Link>
-        ))}
-        <PlaygroundLink collapsed />
+        <WorkspaceModeTabs collapsed />
         <Button size="icon" variant="ghost" onClick={trackNew} title={newLabel} className="h-7 w-7">
           <NewIcon size={15} />
         </Button>
@@ -601,10 +551,6 @@ export function ConversationSidebar({
 
   return (
     <div className="flex h-full flex-col border-r border-border bg-panel-2">
-      {/* Mode switch (Chat|Code|Routines) — mirrors the pill in CodeHomeScreen's own header,
-          kept in sync via the route (`mode` above). Lets the user flip modes from the sidebar
-          itself, not just the main content header. This replaced the old single-purpose
-          "Code · preview" footer link. */}
       {/* QA_BUGS.md BUG-06: on mobile this sidebar renders as a `position: fixed` full-height
           drawer (ChatScreen.tsx), not inside Shell's own column — Shell's top-inset padding
           (Shell.tsx) never reaches a fixed-position element, so this pill needs the same
@@ -612,30 +558,8 @@ export function ConversationSidebar({
           through it. 0 on desktop (this sidebar sits in normal flow there, beside content that
           already starts below any inset) and 0 on any browser with no inset to report. */}
       <div className="px-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
-        <div className="flex overflow-hidden rounded-lg border border-border" role="group" aria-label="Workspace mode">
-          {modeTabs.map(({ mode: m, href, label, icon: Icon }) =>
-            mode === m ? (
-              <span
-                key={m}
-                aria-current="page"
-                className="flex flex-1 items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium"
-                style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}
-              >
-                <Icon size={13} /> {label}
-              </span>
-            ) : (
-              <Link
-                key={m}
-                to={href}
-                className="flex flex-1 items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-panel hover:text-ink"
-              >
-                <Icon size={13} /> {label}
-              </Link>
-            ),
-          )}
-        </div>
+        <WorkspaceModeTabs />
       </div>
-      <PlaygroundLink />
 
       <div className="flex items-center gap-2 px-3 pb-3 pt-2">
         {onToggle && (

@@ -4,7 +4,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { SwitchModelMenu, switchToModel } from './SwitchModelMenu'
+import { SwitchModelMenu, ejectModel, switchToModel } from './SwitchModelMenu'
 import type { JevStatus, ModelEntry } from '../../lib/types'
 
 const h = vi.hoisted(() => ({ track: vi.fn(), toastError: vi.fn() }))
@@ -235,5 +235,29 @@ describe('switchToModel', () => {
     await switchToModel({ ...CURRENT, slot: 'pool' }, CHAT, d)
 
     expect(h.toastError).toHaveBeenCalledWith('Could not switch model: check the engine logs on the Engines screen.')
+  })
+
+  // ADR-444, amended 2026-09-25: the playground stays open with nothing loaded, and its model list loads from there.
+  it('loads straight away when the playground has nothing loaded', async () => {
+    const d = deps()
+    await switchToModel(null, OTHER_JEV, d)
+    expect(d.stopEngine).not.toHaveBeenCalled()
+    expect(d.requestLoad).toHaveBeenCalledWith(OTHER_JEV)
+  })
+})
+
+describe('ejectModel', () => {
+  it('stops the model\'s own slot and records the eject', async () => {
+    const stopEngine = vi.fn(async () => ({}))
+    await ejectModel(LAYA, { stopEngine })
+    expect(stopEngine).toHaveBeenCalledWith('laya')
+    expect(h.track).toHaveBeenCalledWith('workspace', 'eject_model')
+  })
+
+  it('says why when the model will not eject', async () => {
+    const { ApiError } = await import('../../lib/api')
+    const stopEngine = vi.fn(async () => { throw new ApiError('engine_busy', 'The engine is still generating.', 409) })
+    await ejectModel(LAYA, { stopEngine })
+    expect(h.toastError).toHaveBeenCalledWith('Could not eject model: The engine is still generating.')
   })
 })

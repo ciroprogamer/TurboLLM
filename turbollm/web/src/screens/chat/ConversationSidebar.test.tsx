@@ -1,9 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConversationSidebar } from './ConversationSidebar'
 import type { CodeSession } from '../../lib/code-types'
+import type { ModelEntry, Status } from '../../lib/types'
 
 const RUNNING_SESSION: CodeSession = {
   id: 's-running',
@@ -46,16 +47,56 @@ vi.mock('../../lib/code-api', async (importOriginal) => {
   }
 })
 
-function renderSidebar() {
+const catalog: { status: Status | undefined; models: ModelEntry[] | undefined } = { status: undefined, models: undefined }
+
+vi.mock('../../lib/queries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/queries')>()),
+  useStatus: () => ({ data: catalog.status }),
+  useModels: () => ({ data: catalog.models ? { models: catalog.models, scanning: false } : undefined }),
+}))
+
+function renderSidebar(collapsed = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/workspace/code']}>
-        <ConversationSidebar activeId={null} onSelect={() => {}} onNew={() => {}} />
+        <ConversationSidebar activeId={null} onSelect={() => {}} onNew={() => {}} collapsed={collapsed} />
       </MemoryRouter>
     </QueryClientProvider>,
   )
 }
+
+beforeEach(() => {
+  catalog.status = undefined
+  catalog.models = undefined
+})
+
+// ADR-444, amended 2026-09-25: the playground is a Workspace tab beside Chat, Code and Routines, not a link under them.
+describe('ConversationSidebar — the text classification tab', () => {
+  const LAYA_LOADED = {
+    textClassification: { key: 'laya-key', name: 'laya', runtime: 'laya', state: 'running', slot: 'pool', checkpoints: ['english'] },
+    jev: null,
+    laya: null,
+  } as unknown as Status
+  const LIBRARY_LAYA = { key: 'laya-key', name: 'laya', loaded: true, laya: { checkpoints: ['english'] } } as unknown as ModelEntry
+
+  it('offers the playground inside the Workspace mode control, with no link under it', () => {
+    catalog.status = LAYA_LOADED
+    catalog.models = [LIBRARY_LAYA]
+    renderSidebar()
+    const group = screen.getByRole('group', { name: 'Workspace mode' })
+    expect(within(group).getByRole('link', { name: /Text classification/ })).toHaveAttribute('href', '/workspace/text-classification')
+    expect(screen.queryByText(/Open playground/)).toBeNull()
+  })
+
+  it('offers it as an icon in the collapsed rail', () => {
+    catalog.status = LAYA_LOADED
+    catalog.models = [LIBRARY_LAYA]
+    renderSidebar(true)
+    expect(screen.getByTitle('Text classification')).toHaveAttribute('href', '/workspace/text-classification')
+    expect(screen.queryByTitle('Open the text classification playground')).toBeNull()
+  })
+})
 
 describe('ConversationSidebar — background-running Code sessions (ADR-256)', () => {
   it('shows a live indicator for a session the daemon reports running, even with no tab open on it', async () => {

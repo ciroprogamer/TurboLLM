@@ -46,11 +46,18 @@ export function SwitchModelMenu({
 /** ADR-427: a Jev model in a POOL slot keeps its own engine, so a chat pick has to eject that
  *  slot — a primary swap already replaces what is running. A slot that refuses to eject stops
  *  the switch and says so: loading on top of it would leave the playground open with no
- *  explanation. */
-export async function switchToModel(current: LoadedJev, m: ModelEntry, deps: SwitchDeps): Promise<void> {
+ *  explanation. With nothing loaded (ADR-444, amended 2026-09-25) there is nothing to eject. */
+export async function switchToModel(current: LoadedJev | null, m: ModelEntry, deps: SwitchDeps): Promise<void> {
   track('workspace', 'jev_switch_model')
-  if (needsEject(current, m) && !(await ejected(current, deps))) return
+  if (current && needsEject(current, m) && !(await ejected(current, deps))) return
   deps.requestLoad(m)
+}
+
+/** The playground's model list ejects a model in place. A refusal says so, or the row would look as if the click
+ *  did nothing. */
+export async function ejectModel(m: ModelEntry, deps: Pick<SwitchDeps, 'stopEngine'>): Promise<void> {
+  track('workspace', 'eject_model')
+  await stoppedOrReported(m.key, deps, (e) => `Could not eject model: ${failureReason(e)}`)
 }
 
 /** Only a primary slot is replaced by the load itself. An unknown slot (the catalog fallback
@@ -65,18 +72,26 @@ function needsEject(current: LoadedJev, m: ModelEntry): boolean {
   return !m.jev && current.slot !== 'primary'
 }
 
-async function ejected(current: LoadedJev, deps: SwitchDeps): Promise<boolean> {
+function ejected(current: LoadedJev, deps: SwitchDeps): Promise<boolean> {
+  return stoppedOrReported(current.key, deps, (e) => `Could not switch model: ${failureReason(e)}`)
+}
+
+async function stoppedOrReported(
+  key: string,
+  deps: Pick<SwitchDeps, 'stopEngine'>,
+  failureMessage: (e: unknown) => string,
+): Promise<boolean> {
   try {
-    await deps.stopEngine(current.key)
+    await deps.stopEngine(key)
     return true
   } catch (e) {
-    toast.error(switchFailureMessage(e))
+    toast.error(failureMessage(e))
     return false
   }
 }
 
-function switchFailureMessage(e: unknown): string {
-  return `Could not switch model: ${e instanceof ApiError ? e.message : 'check the engine logs on the Engines screen.'}`
+function failureReason(e: unknown): string {
+  return e instanceof ApiError ? e.message : 'check the engine logs on the Engines screen.'
 }
 
 function ModelGroup({ title, models, onPick }: { title: string; models: ModelEntry[]; onPick: (m: ModelEntry) => void }) {
@@ -101,7 +116,11 @@ function ModelGroup({ title, models, onPick }: { title: string; models: ModelEnt
   )
 }
 
-/** Only models that would really load right now — an offer that 400s is worse than no offer. */
 function canLoad(m: ModelEntry, current: LoadedJev): boolean {
-  return !m.incomplete && !m.parseError && m.compatibleWithActiveEngine && !m.embedding && m.key !== current.key
+  return canLoadNow(m) && m.key !== current.key
+}
+
+/** Only models that would really load right now — an offer that 400s is worse than no offer. */
+export function canLoadNow(m: ModelEntry): boolean {
+  return !m.incomplete && !m.parseError && m.compatibleWithActiveEngine && !m.embedding
 }

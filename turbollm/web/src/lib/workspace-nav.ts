@@ -47,11 +47,12 @@ export function resolveNavTarget(to: string): string {
   return to === '/workspace' ? getLastWorkspacePath() : to
 }
 
-/** ADR-434 (i)(2): the text classification playground is a /workspace/* route, but it exists only
- *  while such a model is loaded. Remembering it would trap the user — unloading the model would
- *  send them back to a route that immediately redirects, instead of the chat or session they left.
- *  Both the write and the read reject it, at its old Jev URL too (ADR-444), so a value stored by
- *  an older build is ignored as well. */
+/** ADR-434 (i)(2): the text classification playground is a /workspace/* route, but it redirects
+ *  to chat once no such model is loaded or in the library (ADR-444, amended 2026-09-25).
+ *  Remembering it could trap the user — the Workspace nav item would land on a route that
+ *  immediately redirects, instead of the chat or session they left. Both the write and the read
+ *  reject it, at its old Jev URL too (ADR-444), so a value stored by an older build is ignored as
+ *  well. */
 function isPlayground(pathname: string): boolean {
   return PLAYGROUND_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))
 }

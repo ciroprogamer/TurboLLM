@@ -18,12 +18,15 @@ const h = vi.hoisted(() => ({
   requestLoad: vi.fn(),
 }))
 
-const state: { status: Status | undefined; models: ModelEntry[] } = { status: undefined, models: [] }
+const state: { status: Status | undefined; models: ModelEntry[]; desktop: boolean } = { status: undefined, models: [], desktop: true }
 
 vi.mock('../../lib/queries', () => ({
   useStatus: () => ({ data: state.status }),
   useModels: () => ({ data: { models: state.models, scanning: false } }),
+  useSettings: () => ({ query: { data: { experimental: { routines: false } } } }),
+  useSysInfo: () => ({ data: { os: 'linux/x64' }, isError: false }),
 }))
+vi.mock('../../lib/useIsDesktop', () => ({ useIsDesktop: () => state.desktop }))
 vi.mock('../../lib/jev-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/jev-api')>()),
   systemone: (...a: unknown[]) => h.systemone(...a),
@@ -164,6 +167,7 @@ beforeEach(() => {
   h.systemone.mockResolvedValue(RESPONSE)
   state.status = status()
   state.models = [jevModel()]
+  state.desktop = true
   window.localStorage.clear()
 })
 
@@ -226,7 +230,7 @@ describe('JevPlaygroundScreen', () => {
     expect(h.track).toHaveBeenCalledWith('workspace', 'jev_switch_model')
   })
 
-  it('has no mode toggle and no left rail', () => {
+  it('has no Check or Choose mode toggle and no old Jev Playground title', () => {
     renderScreen()
     expect(screen.queryByRole('button', { name: 'Check' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Choose' })).toBeNull()
@@ -665,8 +669,8 @@ describe('JevPlaygroundScreen remembering the draft', () => {
     expect(screen.getByLabelText('questions')).toHaveValue('{}')
 
     editText('state', 'S, edited')
-    expect(storage.getItem).toHaveBeenCalledTimes(1)
-    expect(storage.getItem).toHaveBeenCalledWith(DRAFT_KEY)
+    // The Workspace mode control reads its own keys (the last chat and Code session) on every render.
+    expect(storage.getItem.mock.calls.filter(([key]) => key === DRAFT_KEY)).toHaveLength(1)
   })
 
   it('writes an edit only after 400 ms, as the JSON of both texts', () => {
@@ -796,5 +800,94 @@ describe('JevPlaygroundScreen with a Laya model', () => {
     renderScreen()
     expect(screen.queryByText(/NLI entailment scores/)).toBeNull()
     expect(screen.getByText(/Laya's own probabilities/)).toBeInTheDocument()
+  })
+})
+
+// ADR-444, amended 2026-09-25: the playground is a Workspace tab with the same left column as the other Workspace
+// modes — the mode control on top, the library's text classification models below it.
+const LAYA_KEY = 'laya|laya|1455'
+const NOTHING_LOADED = { engine: { id: 'llama', name: 'llama.cpp', kind: 'llama-server', state: 'running' }, textClassification: null, jev: null, laya: null } as unknown as Status
+const CHAT_MODEL = { key: 'gemma-27b', name: 'Gemma 27B', loaded: true, incomplete: false, parseError: null, embedding: false, compatibleWithActiveEngine: true } as ModelEntry
+const LIBRARY_LAYA = { key: LAYA_KEY, name: 'laya', laya: { checkpoints: ['english'] }, loaded: false, incomplete: false, parseError: null, embedding: false, compatibleWithActiveEngine: true } as ModelEntry
+
+function modelList(): HTMLElement {
+  return screen.getByRole('region', { name: 'Text classification models' })
+}
+
+describe('JevPlaygroundScreen in the Workspace', () => {
+  it('has a left column with the Workspace mode control on Text classification, and the model list', () => {
+    renderScreen()
+    const modes = screen.getByRole('group', { name: 'Workspace mode' })
+    expect(within(modes).getByText('Text classification').closest('[aria-current="page"]')).toBeInTheDocument()
+    expect(within(modelList()).getByRole('button', { name: 'Eject qwen3.5 4b nli v2' })).toBeInTheDocument()
+  })
+
+  it('puts the mode control on top on a phone and leaves the model list to the Switch model menu', () => {
+    state.desktop = false
+    renderScreen()
+    expect(screen.getByRole('group', { name: 'Workspace mode' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Text classification models' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Switch model' })).toBeInTheDocument()
+  })
+})
+
+describe('JevPlaygroundScreen with nothing loaded', () => {
+  beforeEach(() => {
+    state.status = NOTHING_LOADED
+    state.models = [CHAT_MODEL, LIBRARY_LAYA, jevModel({ loaded: false })]
+  })
+
+  it('says so, points at Discover, and shows no editors', () => {
+    renderScreen()
+    expect(screen.getByText('No text classification model is loaded.')).toBeInTheDocument()
+    expect(screen.getByText('Load one from the list to try it.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Find one in Discover' })).toHaveAttribute('href', '/models?tab=discover')
+    expect(screen.queryByLabelText('state')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Run' })).toBeNull()
+  })
+
+  it('lists the library\'s text classification models to load, and no chat model', () => {
+    renderScreen()
+    expect(within(modelList()).getByRole('button', { name: 'Load laya' })).toBeInTheDocument()
+    expect(within(modelList()).getByRole('button', { name: 'Load qwen3.5 4b nli v2' })).toBeInTheDocument()
+    expect(within(modelList()).queryByText('Gemma 27B')).toBeNull()
+  })
+
+  it('loads a model through the shared loader, with nothing to eject first', async () => {
+    renderScreen()
+    await userEvent.click(screen.getByRole('button', { name: 'Load qwen3.5 4b nli v2' }))
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(jevModel({ loaded: false })))
+    expect(h.stopEngine).not.toHaveBeenCalled()
+  })
+
+  it('keeps the list in the page on a phone, where there is no left column', () => {
+    state.desktop = false
+    renderScreen()
+    expect(screen.getByRole('group', { name: 'Workspace mode' })).toBeInTheDocument()
+    expect(within(modelList()).getByRole('button', { name: 'Load laya' })).toBeInTheDocument()
+  })
+})
+
+describe('JevPlaygroundScreen model list', () => {
+  it('ejects the loaded Jev model', async () => {
+    h.stopEngine.mockResolvedValue({ ok: true })
+    renderScreen()
+    await userEvent.click(within(modelList()).getByRole('button', { name: 'Eject qwen3.5 4b nli v2' }))
+    await waitFor(() => expect(h.stopEngine).toHaveBeenCalledWith(KEY))
+    expect(h.track).toHaveBeenCalledWith('workspace', 'eject_model')
+    expect(h.requestLoad).not.toHaveBeenCalled()
+  })
+
+  it('ejects the loaded Laya model before loading a Jev model, as the Switch model menu does', async () => {
+    h.stopEngine.mockResolvedValue({ ok: true })
+    state.status = {
+      ...NOTHING_LOADED,
+      textClassification: { key: LAYA_KEY, name: 'laya', runtime: 'laya', state: 'running', slot: 'pool', checkpoints: ['english'] },
+    } as unknown as Status
+    state.models = [{ ...LIBRARY_LAYA, loaded: true }, jevModel({ loaded: false })]
+    renderScreen()
+    await userEvent.click(within(modelList()).getByRole('button', { name: 'Load qwen3.5 4b nli v2' }))
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(jevModel({ loaded: false })))
+    expect(h.stopEngine).toHaveBeenCalledWith(LAYA_KEY)
   })
 })

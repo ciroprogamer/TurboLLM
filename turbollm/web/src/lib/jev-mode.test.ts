@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   TEXT_CLASSIFICATION_PATH,
+  hasTextClassifier,
   isWorkspaceWorkPath,
   jevPresence,
   playgroundAvailable,
@@ -177,26 +178,87 @@ describe('workspaceRedirect with a Laya model loaded', () => {
   })
 })
 
+const NOTHING_LOADED = { textClassification: null, jev: null, laya: null } as unknown as Status
+const LIBRARY_LAYA = model({ key: 'laya|laya|1455', name: 'laya', laya: { checkpoints: ['english'] }, loaded: false })
+const LIBRARY_JEV = model({ key: LOADED.key, name: LOADED.name, jev: JEV_INFO, loaded: false })
+const LIBRARY_CHAT = model({ key: 'gemma-27b', name: 'Gemma 27B', loaded: true })
+
+// ADR-444, amended 2026-09-25: the Workspace's "Text classification" tab is there whenever the user has such a model
+// to use — loaded, or waiting in the library — and stays after an eject.
+describe('hasTextClassifier', () => {
+  it('is true while one is loaded, even before the library has been read', () => {
+    expect(hasTextClassifier(statusWithTextClassifier(LAYA_TEXT_CLASSIFIER), undefined)).toBe(true)
+    expect(hasTextClassifier(statusWithTextClassifier(JEV_TEXT_CLASSIFIER), undefined)).toBe(true)
+  })
+
+  it('is true when the library holds one and nothing is loaded, whichever runtime serves it', () => {
+    expect(hasTextClassifier(NOTHING_LOADED, [LIBRARY_CHAT, LIBRARY_LAYA])).toBe(true)
+    expect(hasTextClassifier(NOTHING_LOADED, [LIBRARY_JEV])).toBe(true)
+  })
+
+  it('is false when the library holds only chat models and nothing is loaded', () => {
+    expect(hasTextClassifier(NOTHING_LOADED, [LIBRARY_CHAT])).toBe(false)
+    expect(hasTextClassifier(NOTHING_LOADED, [])).toBe(false)
+  })
+
+  it('is false while nothing has been read yet', () => {
+    expect(hasTextClassifier(undefined, undefined)).toBe(false)
+  })
+
+  it('reads the library for an older daemon that has no text classification field', () => {
+    expect(hasTextClassifier(statusWith(null), [LIBRARY_LAYA])).toBe(true)
+    expect(hasTextClassifier(statusWith(null), [LIBRARY_CHAT])).toBe(false)
+  })
+})
+
 describe('playgroundAvailable', () => {
   const LAYA_STATUS = { key: 'laya|laya|1455', name: 'laya', checkpoints: ['english'], state: 'running' as const }
 
   it('is true for a text classification model on either runtime', () => {
-    expect(playgroundAvailable(statusWithTextClassifier(JEV_TEXT_CLASSIFIER), undefined)).toBe(true)
-    expect(playgroundAvailable(statusWithTextClassifier(LAYA_TEXT_CLASSIFIER), undefined)).toBe(true)
+    expect(playgroundAvailable(statusWithTextClassifier(JEV_TEXT_CLASSIFIER), [])).toBe(true)
+    expect(playgroundAvailable(statusWithTextClassifier(LAYA_TEXT_CLASSIFIER), [])).toBe(true)
   })
 
-  it('is false when the text classification status says nothing is loaded, whatever the older fields say', () => {
-    const stale = { textClassification: null, laya: LAYA_STATUS } as unknown as Status
-    expect(playgroundAvailable(stale, [{ laya: { checkpoints: ['english'] }, loaded: true } as unknown as ModelEntry])).toBe(false)
+  it('is true with nothing loaded while the library holds one to load', () => {
+    expect(playgroundAvailable(NOTHING_LOADED, [LIBRARY_CHAT, LIBRARY_LAYA])).toBe(true)
+    expect(playgroundAvailable(NOTHING_LOADED, [LIBRARY_JEV])).toBe(true)
   })
 
-  it('reads the daemon status when it has the field', () => {
-    expect(playgroundAvailable({ laya: LAYA_STATUS } as unknown as Status, undefined)).toBe(true)
-    expect(playgroundAvailable({ laya: null } as unknown as Status, [{ laya: { checkpoints: [] }, loaded: true } as unknown as ModelEntry])).toBe(false)
+  it('is false with nothing loaded and none in the library', () => {
+    expect(playgroundAvailable(NOTHING_LOADED, [LIBRARY_CHAT])).toBe(false)
+    expect(playgroundAvailable(NOTHING_LOADED, [])).toBe(false)
   })
 
-  it('falls back to the catalog when the status has no laya field', () => {
-    expect(playgroundAvailable(undefined, [{ laya: { checkpoints: ['english'] }, loaded: true } as unknown as ModelEntry])).toBe(true)
-    expect(playgroundAvailable(undefined, [{ laya: { checkpoints: ['english'] }, loaded: false } as unknown as ModelEntry])).toBe(false)
+  it('counts a library it has not read yet as holding one: a guess must not bounce the page to chat', () => {
+    expect(playgroundAvailable(NOTHING_LOADED, undefined)).toBe(true)
+  })
+
+  it('reads an older daemon\'s laya field', () => {
+    expect(playgroundAvailable({ laya: LAYA_STATUS } as unknown as Status, [])).toBe(true)
+    expect(playgroundAvailable({ laya: null } as unknown as Status, [LIBRARY_CHAT])).toBe(false)
+  })
+
+  it('falls back to the catalog when the status cannot be read', () => {
+    expect(playgroundAvailable(undefined, [{ ...LIBRARY_LAYA, loaded: true }])).toBe(true)
+    expect(playgroundAvailable(undefined, [LIBRARY_CHAT])).toBe(false)
+  })
+})
+
+// What the Workspace gate composes: the playground's own URL with nothing loaded.
+describe('the playground with nothing loaded', () => {
+  function redirectOf(status: Status | undefined, models: ModelEntry[] | undefined) {
+    return workspaceRedirect(TEXT_CLASSIFICATION_PATH, jevPresence(status, models), playgroundAvailable(status, models))
+  }
+
+  it('stays open when the library holds a text classification model', () => {
+    expect(redirectOf(NOTHING_LOADED, [LIBRARY_CHAT, LIBRARY_LAYA])).toBeNull()
+  })
+
+  it('goes back to chat when the library holds none', () => {
+    expect(redirectOf(NOTHING_LOADED, [LIBRARY_CHAT])).toEqual({ to: '/workspace/chat', notice: false })
+  })
+
+  it('never redirects while nothing has been read', () => {
+    expect(redirectOf(undefined, undefined)).toBeNull()
   })
 })

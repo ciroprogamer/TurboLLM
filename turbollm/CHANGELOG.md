@@ -39,6 +39,10 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   ready toast, the switch-model menu and the error messages all say so. The playground moved to
   `/workspace/text-classification`; the old `/workspace/jev` address redirects to it. A Jev model still takes the
   Workspace over while it is loaded, and a Laya model still loads beside your chat model.
+- **The playground is a real Workspace tab.** A **Text classification** tab sits under Chat, Code and Routines
+  whenever your library holds a text classification model, and stays after you eject it. This replaces the
+  "Open playground" link that used to sit under the tabs. The playground's left column has the same tabs and lists
+  your text classification models with Load and Eject; with none loaded it says so and lets you load one.
 
 ### Fixed
 

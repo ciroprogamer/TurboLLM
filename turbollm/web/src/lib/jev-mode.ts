@@ -5,6 +5,7 @@
 // Pure on purpose. The gate that calls this runs on every /workspace* render, and the one
 // failure mode that matters is a redirect loop, so the rules have to be testable without a
 // router, a store or a poll.
+import { isSystemOneModel } from './model-kind'
 import type { ModelEntry, Status } from './types'
 
 export const TEXT_CLASSIFICATION_PATH = '/workspace/text-classification'
@@ -55,16 +56,33 @@ function isAtOrUnder(pathname: string, section: string): boolean {
   return pathname === section || pathname.startsWith(`${section}/`)
 }
 
-/** Whether a text classification model is loaded for the playground to run against. The one status field is the
- *  authority (ADR-444). An older daemon's answer is whether a Laya model is loaded: a Jev model there is
- *  `jevPresence`'s to report, and the gate asks that first. */
+/** Whether the Workspace offers its "Text classification" tab (ADR-444, amended 2026-09-25): one is loaded, or the
+ *  library holds one to load. It stays after an eject, so the tab never vanishes under the user. */
+export function hasTextClassifier(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
+  return !!status?.textClassification || libraryHoldsTextClassifier(models)
+}
+
+/** Whether the playground has something to offer: a text classification model loaded to run, or one in the library
+ *  to load from its list (ADR-444, amended 2026-09-25). A library not read yet counts as holding one — status often
+ *  answers first, and sending the page to chat then would bounce a deep link on a guess. */
 export function playgroundAvailable(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
+  if (models === undefined) return true
+  return textClassifierLoaded(status, models) || libraryHoldsTextClassifier(models)
+}
+
+function libraryHoldsTextClassifier(models: ModelEntry[] | undefined): boolean {
+  return models?.some(isSystemOneModel) ?? false
+}
+
+/** The one status field is the authority (ADR-444). An older daemon's answer is whether a Laya model is loaded: a
+ *  Jev model there is `jevPresence`'s to report, and the gate asks that first. */
+function textClassifierLoaded(status: Status | undefined, models: ModelEntry[]): boolean {
   if (status && 'textClassification' in status) return !!status.textClassification
   return layaLoaded(status, models)
 }
 
 /** Status is the authority; the models list is the fallback for a client that cannot read it (ADR-443). */
-function layaLoaded(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
+function layaLoaded(status: Status | undefined, models: ModelEntry[]): boolean {
   if (status && 'laya' in status) return !!status.laya
-  return models?.some((m) => m.laya && m.loaded) ?? false
+  return models.some((m) => m.laya && m.loaded)
 }

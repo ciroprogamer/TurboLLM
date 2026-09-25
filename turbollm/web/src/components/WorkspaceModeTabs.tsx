@@ -91,7 +91,7 @@ function SegmentRow({ tabs, active }: { tabs: ModeTab[]; active: WorkspaceMode }
           <span
             key={mode}
             aria-current="page"
-            className="flex flex-1 items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium"
+            className="flex flex-auto items-center justify-center gap-1 px-1.5 py-1.5 text-[12px] font-medium"
             style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}
           >
             <Icon size={13} /> {label}
@@ -101,7 +101,7 @@ function SegmentRow({ tabs, active }: { tabs: ModeTab[]; active: WorkspaceMode }
             key={mode}
             to={href}
             onClick={onOpen}
-            className="flex flex-1 items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-panel hover:text-ink"
+            className="flex flex-auto items-center justify-center gap-1 px-1.5 py-1.5 text-[12px] font-medium text-muted transition-colors hover:bg-panel hover:text-ink"
           >
             <Icon size={13} /> {label}
           </Link>

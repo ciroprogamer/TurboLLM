@@ -70,6 +70,18 @@ describe('WorkspaceModeTabs', () => {
     expect(within(group).queryByText('Text classification')).toBeNull()
   })
 
+  // Measured live at the 224px sidebar: equal thirds clipped "Routines" to "Rout"; sizing each segment to its content
+  // (with tighter padding) fits all three labels.
+  it('sizes each segment to its label, so Routines is not clipped in the narrow sidebar', () => {
+    renderTabs()
+    const group = modeGroup()
+    for (const label of ['Chat', 'Code', 'Routines']) {
+      const segment = within(group).getByText(label).closest('a, span[aria-current]')
+      expect(segment).toHaveClass('flex-auto', 'px-1.5', 'gap-1')
+      expect(segment).not.toHaveClass('flex-1')
+    }
+  })
+
   it('leaves Routines out while the experimental flag is off', () => {
     state.routines = false
     renderTabs()

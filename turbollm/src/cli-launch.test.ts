@@ -1,7 +1,7 @@
-// A coding agent needs a chat model: a Jev model labels text and cannot hold a conversation
-// (ADR-434 (f)). `turbollm launch` must never pick one — not by `--model`, not by auto-load, and
-// not by writing it into a harness's own model picker. Injected `_spawn`/`_fetch`/`_mcpFs` only:
-// no process, no network, no port.
+// A coding agent needs a chat model: a text classification model (Jev or Laya) labels or scores text
+// and cannot hold a conversation (ADR-434 (f), ADR-444). `turbollm launch` must never pick one — not
+// by `--model`, not by auto-load, and not by writing it into a harness's own model picker. Injected
+// `_spawn`/`_fetch`/`_mcpFs` only: no process, no network, no port.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { EventEmitter } from 'node:events'
@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { launchCli, type ConfigFs } from './cli-launch.js'
 
 const JEV = { key: 'jev-fake-v2', name: 'jev fake v2', jev: { labels: ['contradiction', 'entailment', 'neutral'], architecture: 'Qwen3_5ForSequenceClassification', verified: true } }
+const LAYA = { key: 'laya|laya|1455', name: 'laya', laya: { checkpoints: ['english'] } }
 const CHAT = { key: 'qwen3-8b', name: 'Qwen3 8B' }
 const HOME = '/home/tester'
 
@@ -60,7 +61,7 @@ function fakeDaemon(lastLoadedKey?: string, loadedKey: string | null = null, opt
     }
     if (url.includes('/api/v1/models')) {
       if (options.libraryFails) throw new Error('read ECONNRESET')
-      return { ok: true, status: 200, json: async () => ({ models: [JEV, CHAT] }) } as Response
+      return { ok: true, status: 200, json: async () => ({ models: [JEV, LAYA, CHAT] }) } as Response
     }
     if (url.includes('/api/v1/engine/start')) {
       const parsed = JSON.parse(String(init?.body ?? '{}')) as { modelKey?: string }
@@ -113,7 +114,7 @@ test('--model naming a Jev model refuses with a clear reason and loads nothing',
   const { code, stderr } = await captured(() => launchCli('claude', 6996, [], spawn.fn, 'jev-fake-v2', daemon.fetch))
 
   assert.equal(code, 1)
-  assert.equal(stderr, `'jev fake v2' is a Jev model (it labels text) — coding agents need a chat model.\n`)
+  assert.equal(stderr, `'jev fake v2' is a text classification model — coding agents need a chat model.\n`)
   assert.deepEqual(daemon.loads, [], 'nothing may be loaded')
   assert.equal(spawn.calls, 0, 'the agent must not be launched')
 })
@@ -124,8 +125,31 @@ test('--model naming a Jev model by NAME is refused too', async () => {
   const { code, stderr } = await captured(() => launchCli('claude', 6996, [], makeSpawn().fn, 'jev fake v2', daemon.fetch))
 
   assert.equal(code, 1)
-  assert.match(stderr, /is a Jev model/)
+  assert.match(stderr, /is a text classification model/)
   assert.deepEqual(daemon.loads, [])
+})
+
+test('--model naming a Laya model is refused the same way and loads nothing', async () => {
+  const spawn = makeSpawn()
+  const daemon = fakeDaemon()
+
+  const { code, stderr } = await captured(() => launchCli('claude', 6996, [], spawn.fn, LAYA.key, daemon.fetch))
+
+  assert.equal(code, 1)
+  assert.equal(stderr, `'laya' is a text classification model — coding agents need a chat model.\n`)
+  assert.deepEqual(daemon.loads, [], 'nothing may be loaded')
+  assert.equal(spawn.calls, 0, 'the agent must not be launched')
+})
+
+test('auto-load skips a Laya model even when it was the last one loaded', async () => {
+  const spawn = makeSpawn()
+  const daemon = fakeDaemon(LAYA.key)
+
+  const { code } = await captured(() => launchCli('claude', 6996, [], spawn.fn, undefined, daemon.fetch))
+
+  assert.equal(code, 0)
+  assert.deepEqual(daemon.loads, ['qwen3-8b'], 'the chat model is loaded, never the Laya one')
+  assert.equal(spawn.calls, 1)
 })
 
 test('auto-load skips a Jev model even when it was the last one loaded', async () => {
@@ -146,7 +170,7 @@ test('no --model, with a Jev model already loaded, refuses instead of pinning th
   const { code, stderr } = await captured(() => launchCli('claude', 6996, [], spawn.fn, undefined, daemon.fetch, undefined, memFs()))
 
   assert.equal(code, 1)
-  assert.equal(stderr, `'jev fake v2' is a Jev model (it labels text) — coding agents need a chat model.
+  assert.equal(stderr, `'jev fake v2' is a text classification model — coding agents need a chat model.
 `)
   assert.deepEqual(daemon.loads, [], 'nothing may be loaded')
   assert.equal(spawn.calls, 0, 'the agent must not be launched')
@@ -173,7 +197,7 @@ test('no --model, with a chat model already loaded, still reuses it without load
   assert.equal(spawn.calls, 1)
 })
 
-test('a config-writing harness never advertises a Jev model in its own picker', async () => {
+test('a config-writing harness never advertises a Jev or Laya model in its own picker', async () => {
   const fs = memFs()
   const daemon = fakeDaemon()
 
@@ -197,7 +221,7 @@ test('--model naming a chat model is unaffected', async () => {
   assert.equal(spawn.calls, 1)
 })
 
-const JEV_REFUSAL = `'jev fake v2' is a Jev model (it labels text) — coding agents need a chat model.\n`
+const JEV_REFUSAL = `'jev fake v2' is a text classification model — coding agents need a chat model.\n`
 const LIBRARY_LISTING = '/api/v1/models'
 
 test('a loaded Jev model is refused on the daemon\'s own report, even when the library cannot be listed', async () => {

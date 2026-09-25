@@ -809,11 +809,12 @@ test('update_routine and delete_routine require routineId', () => {
 })
 
 // The tool that asks a model to pick a modelKey must steer it away from the models
-// list_models marks as Jev.
-test('the create_routine modelKey description warns off Jev models', () => {
+// list_models marks as text classification models (kind: jev or kind: laya).
+test('the create_routine modelKey description warns off text classification models', () => {
   const modelKey = (CREATE_ROUTINE_TOOL.function.parameters.properties as Record<string, { description: string }>).modelKey
 
   assert.match(modelKey.description, /kind: jev/)
+  assert.match(modelKey.description, /kind: laya/)
   assert.match(modelKey.description, /cannot run a routine/)
 })
 

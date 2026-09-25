@@ -330,6 +330,6 @@ test('list_models (MCP): a Jev row is marked kind: jev, a chat row is unchanged'
   const text = (res!.result as { content: Array<{ text: string }> }).content[0].text
   assert.deepEqual(text.split('\n'), [
     '- qwen3-8b — Qwen3 8B (Q4_K_M, 8B)',
-    '- jev-fake-v2 — jev fake v2 (mlx-fp16, 4B) — kind: jev (labels text; cannot chat or run a routine)',
+    '- jev-fake-v2 — jev fake v2 (mlx-fp16, 4B) — kind: jev (text classification; cannot chat or run a routine)',
   ])
 })

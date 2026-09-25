@@ -39,13 +39,18 @@ export function findCheckpoints(
   fileUrl: (path: string) => string,
 ): Omit<HfCheckpoint, 'jev'>[] {
   const byDir = filesByDirectory(tree)
-  return [...byDir.entries()]
-    .filter(([dir, paths]) => isCheckpointDir(dir, paths))
-    .sort(([a], [b]) => compareDirs(a, b))
-    .map(([dir, paths]) => describeCheckpoint(repo, dir, paths, tree, fileUrl))
+  return checkpointDirs(tree).map((dir) => describeCheckpoint(repo, dir, byDir.get(dir) ?? [], tree, fileUrl))
 }
 
-function filesByDirectory(tree: RawTreeEntry[]): Map<string, string[]> {
+/** Pure. The directories {@link findCheckpoints} offers, in the same order, without describing them. */
+export function checkpointDirs(tree: readonly RawTreeEntry[]): string[] {
+  return [...filesByDirectory(tree).entries()]
+    .filter(([dir, paths]) => isCheckpointDir(dir, paths))
+    .map(([dir]) => dir)
+    .sort(compareDirs)
+}
+
+function filesByDirectory(tree: readonly RawTreeEntry[]): Map<string, string[]> {
   const byDir = new Map<string, string[]>()
   for (const entry of tree) {
     if (entry.type !== 'file') continue

@@ -24,7 +24,15 @@ const OPENJEV_ENTRY = {
   },
 } as unknown as ModelEntry
 const GGUF_ENTRY = { key: GGUF_KEY, name: 'Qwen3 8B' } as unknown as ModelEntry
-const LIBRARY = [OPENJEV_ENTRY, GGUF_ENTRY]
+const LAYA_KEY = 'laya|laya|1455'
+const LAYA_ENTRY = { key: LAYA_KEY, name: 'laya', laya: { checkpoints: ['english'] } } as unknown as ModelEntry
+const LIBRARY = [OPENJEV_ENTRY, GGUF_ENTRY, LAYA_ENTRY]
+const CANNOT_CHAT = {
+  ok: false,
+  status: 409,
+  code: 'jev_model_loaded',
+  message: 'A text classification model is loaded — it cannot chat. Switch to a chat model, or use the text classification playground.',
+}
 
 const REMOTE = { linkId: 'lnk1', baseUrl: 'https://rig.invalid', token: 'tllm-hostsecret', modelKey: GGUF_KEY }
 
@@ -51,12 +59,11 @@ function chatDeps(primary: PrimaryState): Deps {
 }
 
 test('a Jev model loaded as the primary → 409 jev_model_loaded instead of an upstream to chat with', () => {
-  assert.deepEqual(resolveChatUpstream(chatDeps({ state: 'running', modelKey: JEV_KEY })), {
-    ok: false,
-    status: 409,
-    code: 'jev_model_loaded',
-    message: 'A Jev model is loaded — it labels text and cannot chat. Switch to a chat model, or use the Jev Playground.',
-  })
+  assert.deepEqual(resolveChatUpstream(chatDeps({ state: 'running', modelKey: JEV_KEY })), CANNOT_CHAT)
+})
+
+test('a Laya model in the primary would get the same refusal: one rule for every text classification model', () => {
+  assert.deepEqual(resolveChatUpstream(chatDeps({ state: 'running', modelKey: LAYA_KEY })), CANNOT_CHAT)
 })
 
 test('a chat model loaded as the primary resolves exactly as before', () => {

@@ -247,10 +247,10 @@ test('a trailing slash does not let a Turbo Link peer past the /v1/classify refu
   })
 })
 
-const CANNOT_CHAT = "'qwen3.5 4b nli v2' is a Jev model: it labels premise/hypothesis pairs and cannot chat. " +
-  'Call POST /v1/systemone (or /v1/classify, /v1/rerank) instead.'
-const CANNOT_EMBED = "'qwen3.5 4b nli v2' is a Jev model: it labels premise/hypothesis pairs and cannot produce " +
-  'embeddings. Call POST /v1/systemone (or /v1/classify, /v1/rerank) instead.'
+const CANNOT_CHAT = "'qwen3.5 4b nli v2' is a text classification model (Jev): it labels premise/hypothesis pairs " +
+  'and cannot chat. Call POST /v1/systemone (or /v1/classify, /v1/rerank) instead.'
+const CANNOT_EMBED = "'qwen3.5 4b nli v2' is a text classification model (Jev): it labels premise/hypothesis pairs " +
+  'and cannot produce embeddings. Call POST /v1/systemone (or /v1/classify, /v1/rerank) instead.'
 
 test('POST /v1/chat/completions on a Jev model → 400 jev_model_wrong_endpoint, nothing routed or loaded', async () => {
   const routed: string[] = []
@@ -311,12 +311,12 @@ test('chat, embeddings and messages on a GGUF model still route exactly as befor
   assert.deepEqual(routed, [GGUF_KEY, GGUF_KEY, GGUF_KEY])
 })
 
-test('GET /v1/models marks a Jev model kind "jev" with no claude- alias; other rows are unchanged', async () => {
+test('GET /v1/models marks a Jev model kind "jev", task text-classification, with no claude- alias; other rows are unchanged', async () => {
   const res = await gatewayApp().request('/v1/models')
   const body = (await res.json()) as { data: Array<Record<string, unknown>> }
 
   assert.deepEqual(body.data, [
-    { id: JEV_KEY, object: 'model', owned_by: 'turbollm', kind: 'jev' },
+    { id: JEV_KEY, object: 'model', owned_by: 'turbollm', kind: 'jev', task: 'text-classification' },
     { id: GGUF_KEY, object: 'model', owned_by: 'turbollm' },
     { id: `claude-${GGUF_KEY}`, object: 'model', display_name: 'Qwen3 8B — TurboLLM' },
   ])
@@ -338,7 +338,7 @@ const URGENT_RESPONSE = {
   usage: { input_tokens: 32, output_tokens: 0 },
 }
 const LISTED_MODELS = [
-  { id: JEV_KEY, object: 'model', owned_by: 'turbollm', kind: 'jev' },
+  { id: JEV_KEY, object: 'model', owned_by: 'turbollm', kind: 'jev', task: 'text-classification' },
   { id: GGUF_KEY, object: 'model', owned_by: 'turbollm' },
   { id: `claude-${GGUF_KEY}`, object: 'model', display_name: 'Qwen3 8B — TurboLLM' },
 ]

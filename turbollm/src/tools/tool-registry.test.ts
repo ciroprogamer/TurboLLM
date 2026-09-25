@@ -361,9 +361,24 @@ function modelsStoreWithJev(): ModelToolsStore {
     list: () => ({ models: [
       { key: 'm', name: 'm', quant: 'Q4_K_M', sizeLabel: '8B' },
       { key: 'jev-fake-v2', name: 'jev fake v2', quant: 'mlx-fp16', sizeLabel: '4B', jev: { labels: ['contradiction', 'entailment', 'neutral'], architecture: 'Qwen3_5ForSequenceClassification', verified: true } },
+      { key: 'laya|laya|1455', name: 'laya', quant: 'laya', sizeLabel: '1.4 GB', laya: { checkpoints: ['english'] } },
     ] }),
   }
 }
+
+test('executeTool(create_routine): a Laya modelKey is refused like a Jev one — both are text classification', async () => {
+  let created = 0
+  const routines = { ...fakeStore(null), createRoutine: () => { created++; return fakeRoutine() } } as unknown as RoutineToolsStore
+  const reg = new ToolRegistry(EMPTY_TOOLS_CFG, routines, undefined, undefined, modelsStoreWithJev())
+
+  const out = await reg.executeTool({ id: 't1', name: 'create_routine', args: {
+    flavor: 'chat', prompt: 'x', scheduleDisplay: 'd', scheduleRule: { kind: 'interval', everyMs: 60_000 },
+    modelKey: 'laya|laya|1455', agentId: 'a',
+  } })
+
+  assert.equal(out, `Error: ${JEV_ROUTINE_MODEL_MESSAGE('laya|laya|1455')}`)
+  assert.equal(created, 0)
+})
 
 test('executeTool(create_routine): a Jev modelKey is refused and createRoutine is never called', async () => {
   let created = 0

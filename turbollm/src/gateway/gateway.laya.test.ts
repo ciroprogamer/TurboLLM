@@ -48,8 +48,10 @@ function post(a: Hono, path: string, body: unknown): Promise<Response> {
   return Promise.resolve(a.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
 }
 
-const CANNOT_CHAT = "'laya' is a Laya model: it answers System One questions and cannot chat. Call POST /v1/systemone instead."
-const CANNOT_EMBED = "'laya' is a Laya model: it answers System One questions and cannot produce embeddings. Call POST /v1/systemone instead."
+const CANNOT_CHAT = "'laya' is a text classification model (Laya): it answers System One questions and cannot chat. " +
+  'Call POST /v1/systemone instead.'
+const CANNOT_EMBED = "'laya' is a text classification model (Laya): it answers System One questions and cannot " +
+  'produce embeddings. Call POST /v1/systemone instead.'
 
 test('POST /v1/chat/completions on a Laya model → 400 laya_model_wrong_endpoint, nothing routed or loaded', async () => {
   const routed: string[] = []
@@ -87,11 +89,11 @@ test('chat on an ordinary model still routes exactly as before', async () => {
   assert.deepEqual(routed, [GGUF_KEY])
 })
 
-test('GET /v1/models marks a Laya model kind "laya" with no claude- alias; other rows are unchanged', async () => {
+test('GET /v1/models marks a Laya model kind "laya", task text-classification, with no claude- alias; other rows are unchanged', async () => {
   const res = await app(deps()).request('/v1/models')
   const body = (await res.json()) as { data: Array<Record<string, unknown>> }
   assert.deepEqual(body.data, [
-    { id: LAYA_KEY, object: 'model', owned_by: 'turbollm', kind: 'laya' },
+    { id: LAYA_KEY, object: 'model', owned_by: 'turbollm', kind: 'laya', task: 'text-classification' },
     { id: GGUF_KEY, object: 'model', owned_by: 'turbollm' },
     { id: `claude-${GGUF_KEY}`, object: 'model', display_name: 'Qwen3 8B — TurboLLM' },
   ])

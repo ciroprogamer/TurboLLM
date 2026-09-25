@@ -15,6 +15,7 @@ import type { ModelRouter } from '../gateway/model-router'
 import type { GenerationGate } from '../agents/gate'
 
 const JEV_KEY = 'jev-fake-v2'
+const LAYA_KEY = 'laya|laya|1455'
 const RAW_KEY = 'tllm-TestKeyTestKeyTestKeyTestKeyTestKey1'
 const RAW_KEY_HASH = createHash('sha256').update(RAW_KEY).digest('hex')
 
@@ -53,7 +54,7 @@ function testApp(opts: { lanBind?: boolean; hasKey?: boolean; routinesEnabled?: 
       }),
       update: (fn: (cfg: { apiKeys: typeof apiKeys }) => void) => fn({ apiKeys }),
     },
-    scanner: { list: () => ({ models: [{ key: 'm', name: 'm' }, { key: 'qwen3-coder-32b', name: 'qwen3-coder-32b' }, { key: JEV_KEY, name: 'jev fake v2', jev: { labels: ['contradiction', 'entailment', 'neutral'], architecture: 'Qwen3_5ForSequenceClassification', verified: true } }] }) },
+    scanner: { list: () => ({ models: [{ key: 'm', name: 'm' }, { key: 'qwen3-coder-32b', name: 'qwen3-coder-32b' }, { key: JEV_KEY, name: 'jev fake v2', jev: { labels: ['contradiction', 'entailment', 'neutral'], architecture: 'Qwen3_5ForSequenceClassification', verified: true } }, { key: LAYA_KEY, name: 'laya', laya: { checkpoints: ['english'] } }] }) },
   } as unknown as Deps
   registerRoutineRoutes(app, d)
   return { app, db }
@@ -1030,6 +1031,33 @@ test('PUT /api/v1/routines/:id refuses a switch to a Jev model and leaves the ro
 
   assert.equal(res.status, 400)
   assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: JEV_ROUTINE_MODEL_MESSAGE(JEV_KEY) } })
+  assert.equal(db.getRoutine(created.id)?.modelKey, 'm')
+})
+
+const LAYA_REFUSAL = `modelKey "${LAYA_KEY}" is a text classification model (Jev or Laya) — it labels or scores text ` +
+  'and cannot run a chat or code routine. Pick a chat model (list_models marks these models with kind: jev or kind: laya).'
+
+test('POST /api/v1/routines refuses a Laya modelKey too: it is a text classification model, like Jev', async () => {
+  const { app, db } = testApp()
+
+  const res = await postRoutine(app, LAYA_KEY)
+
+  assert.equal(res.status, 400)
+  assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: LAYA_REFUSAL } })
+  assert.deepEqual(db.listRoutines(), [])
+})
+
+test('PUT /api/v1/routines/:id refuses a switch to a Laya model and leaves the routine alone', async () => {
+  const { app, db } = testApp()
+  const created = db.createRoutine({ flavor: 'chat', prompt: 'x', scheduleDisplay: 'd', scheduleRule: { kind: 'interval', everyMs: 60_000 }, modelKey: 'm', agentId: 'a' })
+
+  const res = await app.request(`/api/v1/routines/${created.id}`, {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelKey: LAYA_KEY }),
+  })
+
+  assert.equal(res.status, 400)
+  assert.deepEqual(await res.json(), { error: { code: 'invalid_routine', message: LAYA_REFUSAL } })
   assert.equal(db.getRoutine(created.id)?.modelKey, 'm')
 })
 

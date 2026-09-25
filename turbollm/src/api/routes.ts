@@ -59,7 +59,7 @@ import { ScannerError, type ModelEntry } from '../models/scanner'
 import { estimateVram, type LoadProfile, resolveProfile } from '../models/profile'
 import { amdApuOnly, getSysInfo, primaryVendor } from '../sysinfo/sysinfo'
 import { requestUsage } from '../sysinfo/usage'
-import { HfError, type HfSortOption } from '../hf/hf'
+import { HfError, type HfSearchItem, type HfSortOption } from '../hf/hf'
 import type { EnqueueInput } from '../downloads/downloads'
 import { BenchError } from '../bench/bench'
 import { inferRepoFromPath } from './path-utils'
@@ -76,6 +76,7 @@ import { enqueueDownload, listDownloads, removeDownload } from './download-lifec
 import { buildModelStatus } from './status-view'
 import { jevStatus } from './jev-status'
 import { layaStatus } from './laya-status'
+import { textClassificationStatus } from './text-classification-status'
 import { engineDeleteBlocked, modelDeleteBlocked } from './delete-guards'
 import { annotateCheckpoint } from '../hf/checkpoints'
 import { registerActivityRoutes } from './active-work'
@@ -153,6 +154,9 @@ export function registerApi(app: Hono, d: Deps): void {
       // The alive Laya model, if any (ADR-443): the System One playground runs against it. It never changes the
       // Workspace — a Laya model runs beside the chat model.
       laya: layaStatus(d),
+      // The alive text classification model, Jev or Laya (ADR-444): the one field the UI reads for the feature.
+      // A Jev one wins when both are alive, as `jev ?? laya` did.
+      textClassification: textClassificationStatus(d),
       engineStats: core.engineStats,
       liveGeneration: core.liveGeneration,
       // Auto-tune runner state (spec 09 §1): real progress while a sweep runs, then
@@ -2427,9 +2431,7 @@ export function registerApi(app: Hono, d: Deps): void {
     const rawSort = c.req.query('sort') ?? ''
     const sort: HfSortOption = (SORT_OPTIONS as string[]).includes(rawSort) ? (rawSort as HfSortOption) : 'best-match'
     try {
-      const results = q
-        ? await d.hf.searchModels(q, d.registry.active()?.kind, sort)
-        : await d.hf.browseModels(sort, d.registry.active()?.kind)
+      const results = await searchHf(d, q, sort, c.req.query('category'))
       const withLocal = results.map((r) => ({ ...r, localCount: localCountFor(d, r.repo) }))
       return c.json({ results: withLocal })
     } catch (e) {
@@ -2913,6 +2915,14 @@ function telemetryPreview(level: string, version: string) {
  *  (spec 10 §2 `localCount`). Scanned entries carry no HF repo id, so we match the
  *  repo's name segment (after the owner) against the local model name/path,
  *  case-insensitively. Best-effort — drives a "↓ N in library" hint only. */
+/** The engine-adapted search or browse, or, for `category=text-classification` (ADR-444), the category's own search:
+ *  it lists what runs on the Laya engine or vLLM whichever engine is active, so it ignores the active engine. */
+function searchHf(d: Deps, q: string, sort: HfSortOption, category: string | undefined): Promise<HfSearchItem[]> {
+  if (category === 'text-classification') return d.hf.searchTextClassification(q, sort)
+  const engineKind = d.registry.active()?.kind
+  return q ? d.hf.searchModels(q, engineKind, sort) : d.hf.browseModels(sort, engineKind)
+}
+
 function localCountFor(d: Deps, repo: string): number {
   const seg = (repo.split('/')[1] ?? repo).toLowerCase().replace(/-gguf$/i, '')
   if (!seg) return 0

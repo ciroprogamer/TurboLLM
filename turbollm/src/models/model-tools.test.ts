@@ -33,16 +33,24 @@ const JEV_ROW = {
   key: 'jev-fake-v2', name: 'jev fake v2', quant: 'mlx-fp16', sizeLabel: '4B',
   jev: { labels: ['contradiction', 'entailment', 'neutral'], architecture: 'Qwen3_5ForSequenceClassification', verified: true },
 }
+const LAYA_ROW = { key: 'laya|laya|1455', name: 'laya', quant: 'laya', sizeLabel: '1.4 GB', laya: { checkpoints: ['english'] } }
 const CHAT_ROW = { key: 'qwen3-8b', name: 'Qwen3 8B', quant: 'Q4_K_M', sizeLabel: '8B' }
 
 test('formatModelLine: a chat model line is byte-identical to the one shipped today', () => {
   assert.equal(formatModelLine(CHAT_ROW), '- qwen3-8b — Qwen3 8B (Q4_K_M, 8B)')
 })
 
-test('formatModelLine: a Jev model says so, in one suffix', () => {
+test('formatModelLine: a Jev model says it is text classification, in one suffix', () => {
   assert.equal(
     formatModelLine(JEV_ROW),
-    '- jev-fake-v2 — jev fake v2 (mlx-fp16, 4B) — kind: jev (labels text; cannot chat or run a routine)',
+    '- jev-fake-v2 — jev fake v2 (mlx-fp16, 4B) — kind: jev (text classification; cannot chat or run a routine)',
+  )
+})
+
+test('formatModelLine: a Laya model is marked the same way, with its own kind', () => {
+  assert.equal(
+    formatModelLine(LAYA_ROW),
+    '- laya|laya|1455 — laya (laya, 1.4 GB) — kind: laya (text classification; cannot chat or run a routine)',
   )
 })
 
@@ -52,7 +60,8 @@ test('execListModels: a Jev model stays in the list, marked; the chat row is unc
   assert.deepEqual(out.split('\n'), [formatModelLine(CHAT_ROW), formatModelLine(JEV_ROW)])
 })
 
-test('list_models tells the caller never to use a Jev model as a routine target', () => {
+test('list_models tells the caller never to use a Jev or Laya model as a routine target', () => {
   assert.match(LIST_MODELS_TOOL.function.description, /kind: jev/)
+  assert.match(LIST_MODELS_TOOL.function.description, /kind: laya/)
   assert.match(LIST_MODELS_TOOL.function.description, /never use one as a routine modelKey/)
 })

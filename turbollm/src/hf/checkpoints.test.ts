@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { annotateCheckpoint, findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES } from './checkpoints'
+import { annotateCheckpoint, checkpointDirs, findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES } from './checkpoints'
 import type { HfRepoFile, RawTreeEntry } from './hf'
 import type { ProvenanceEntry } from '../downloads/downloads'
 import type { ModelEntry } from '../models/scanner'
@@ -151,6 +151,13 @@ test('a deeper checkpoint keeps its full POSIX dir and is named by its last segm
 
 test('the config-fetch cap is 16', () => {
   assert.equal(MAX_CHECKPOINT_CONFIG_FETCHES, 16)
+})
+
+test('checkpointDirs names the same checkpoint folders findCheckpoints offers, root first', () => {
+  const tree = [...OPENJEV_TREE, ...SINGLE_ROOT_TREE, ...DIFFUSERS_TREE]
+
+  assert.deepEqual(checkpointDirs(tree), findCheckpoints('a/b', tree, fileUrl).map((cp) => cp.dir))
+  assert.deepEqual(checkpointDirs(tree), ['', 'qwen3.5-35b-a3b-nli', 'qwen3.5-4b-nli-v1', 'qwen3.5-4b-nli-v2'])
 })
 
 // ── annotateCheckpoint: is this checkpoint already on disk, and which local model is it? ──────

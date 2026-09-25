@@ -22,6 +22,7 @@
 import { engineModelAlias } from '../engines/compat'
 import { linkHeaders, proxyStream, type RemoteTarget } from '../link/link-proxy'
 import type { Deps } from '../deps'
+import { isTextClassifier } from '../models/text-classifier'
 import { extractParams, summarizeRequest, drainOpenAiSseForLog, requestLogConfig } from '../observability/request-log'
 
 /** Everything a chat turn needs to know about where it is being generated. */
@@ -89,14 +90,16 @@ export function resolveChatUpstream(d: Deps, requestedModel?: string): ChatUpstr
   if (ms.state !== 'running' || !ms.model) {
     return { ok: false, status: 409, code: 'model_not_loaded', message: 'Load a model first.' }
   }
-  // A Jev model labels premise/hypothesis pairs and has no chat route (ADR-434 (f)): say so,
-  // rather than let the turn reach the engine and come back as an opaque 404.
-  if (d.scanner.get(ms.model.key)?.jev) {
+  // A text classification model labels or scores text and has no chat route (ADR-434 (f), ADR-444):
+  // say so, rather than let the turn reach the engine and come back as an opaque 404. Only a Jev model
+  // can be the primary today — a Laya one always runs in a pool slot — but the rule is one rule.
+  const loadedEntry = d.scanner.get(ms.model.key)
+  if (loadedEntry && isTextClassifier(loadedEntry)) {
     return {
       ok: false,
       status: 409,
       code: 'jev_model_loaded',
-      message: 'A Jev model is loaded — it labels text and cannot chat. Switch to a chat model, or use the Jev Playground.',
+      message: 'A text classification model is loaded — it cannot chat. Switch to a chat model, or use the text classification playground.',
     }
   }
   const target = d.manager.target()

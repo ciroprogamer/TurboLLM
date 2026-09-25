@@ -1,12 +1,16 @@
 // Which Workspace the user gets (ADR-434 (b), (i)(1)): while a Jev model is loaded, Workspace
-// is the Jev Playground and nothing else — Chat, Code and Routines are hidden, not killed.
+// is the text classification playground and nothing else — Chat, Code and Routines are hidden,
+// not killed. A Laya model opens the same playground but never takes the Workspace over (ADR-443).
 //
 // Pure on purpose. The gate that calls this runs on every /workspace* render, and the one
 // failure mode that matters is a redirect loop, so the rules have to be testable without a
 // router, a store or a poll.
 import type { ModelEntry, Status } from './types'
 
-export const JEV_PATH = '/workspace/jev'
+export const TEXT_CLASSIFICATION_PATH = '/workspace/text-classification'
+
+/** The playground's URL before ADR-444. Kept only so a bookmark of it still lands there. */
+export const LEGACY_JEV_PATH = '/workspace/jev'
 
 /** 'unknown' is a real answer, not a missing one: a Turbo Link token scoped to `models:use`
  *  cannot read /status at all, and guessing "none" would bounce a deep link. */
@@ -16,8 +20,11 @@ const CHAT_PATH = '/workspace/chat'
 
 const WORK_PATHS = [CHAT_PATH, '/workspace/code', '/workspace/routines']
 
-/** Status is the authority; the models list is the fallback for a client that cannot read it. */
+/** Status is the authority — its one text classification field first (ADR-444), where only a model on vLLM takes
+ *  the Workspace over; then an older daemon's `jev` field. The models list is the fallback for a client that
+ *  cannot read it. */
 export function jevPresence(status: Status | undefined, models: ModelEntry[] | undefined): JevPresence {
+  if (status && 'textClassification' in status) return status.textClassification?.runtime === 'vllm' ? 'loaded' : 'none'
   if (status && 'jev' in status) return status.jev ? 'loaded' : 'none'
   if (models) return models.some((m) => m.jev && m.loaded) ? 'loaded' : 'none'
   return 'unknown'
@@ -34,12 +41,13 @@ export function isWorkspaceWorkPath(pathname: string): boolean {
 export function workspaceRedirect(
   pathname: string,
   presence: JevPresence,
-  layaIsLoaded = false,
+  playgroundIsAvailable = false,
 ): { to: string; notice: boolean } | null {
   if (presence === 'unknown') return null
-  if (presence === 'loaded' && isWorkspaceWorkPath(pathname)) return { to: JEV_PATH, notice: true }
-  // A loaded Laya model keeps the playground open (ADR-443) but, unlike Jev, never takes the Workspace over.
-  if (presence === 'none' && !layaIsLoaded && isAtOrUnder(pathname, JEV_PATH)) return { to: CHAT_PATH, notice: false }
+  if (presence === 'loaded' && isWorkspaceWorkPath(pathname)) return { to: TEXT_CLASSIFICATION_PATH, notice: true }
+  if (presence === 'none' && !playgroundIsAvailable && isAtOrUnder(pathname, TEXT_CLASSIFICATION_PATH)) {
+    return { to: CHAT_PATH, notice: false }
+  }
   return null
 }
 
@@ -47,9 +55,16 @@ function isAtOrUnder(pathname: string, section: string): boolean {
   return pathname === section || pathname.startsWith(`${section}/`)
 }
 
-/** Whether a Laya model is loaded (ADR-443). Status is the authority; the models list is the fallback for a
- *  client that cannot read it. */
-export function layaLoaded(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
+/** Whether a text classification model is loaded for the playground to run against. The one status field is the
+ *  authority (ADR-444). An older daemon's answer is whether a Laya model is loaded: a Jev model there is
+ *  `jevPresence`'s to report, and the gate asks that first. */
+export function playgroundAvailable(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
+  if (status && 'textClassification' in status) return !!status.textClassification
+  return layaLoaded(status, models)
+}
+
+/** Status is the authority; the models list is the fallback for a client that cannot read it (ADR-443). */
+function layaLoaded(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
   if (status && 'laya' in status) return !!status.laya
   return models?.some((m) => m.laya && m.loaded) ?? false
 }

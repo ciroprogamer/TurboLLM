@@ -49,7 +49,7 @@ describe('JevLoadConfirmHost', () => {
     openConfirm({ items: [], engineGenerating: true })
     render(<JevLoadConfirmHost />)
     expect(screen.getByText('Load qwen3.5 4b nli v2?')).toBeTruthy()
-    expect(screen.getByText('Loading a Jev model stops the running model and interrupts:')).toBeTruthy()
+    expect(screen.getByText('Loading a text classification model on vLLM stops the running model and interrupts:')).toBeTruthy()
   })
 
   it('names each kind of work in the words the user would use', () => {

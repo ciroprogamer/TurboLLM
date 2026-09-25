@@ -228,6 +228,9 @@ export type Status = {
   /** The loaded Laya model, or null (ADR-443). It keeps the System One playground open but, unlike a Jev
    *  model, never takes the Workspace over. Absent from an older daemon and over Turbo Link. */
   laya?: LayaStatus | null
+  /** The alive text classification model, whichever runtime serves it, or null (ADR-444). The Jev one wins when
+   *  both are alive. Absent from an older daemon and over Turbo Link: read `jev`, `laya` and the catalog then. */
+  textClassification?: TextClassificationStatus | null
   telemetryLevel: string
   uptimeSec: number
   /** Locally-enabled feature flags (TURBOLLM_FEATURES env var) — internal/dev only,
@@ -706,6 +709,19 @@ export type LayaStatus = {
   name: string
   checkpoints: string[]
   state: 'starting' | 'running' | 'stopping'
+}
+
+/** Jev and Laya as one feature on /api/v1/status (ADR-444); twin of src/api/text-classification-status.ts.
+ *  `runtime: 'vllm'` is a Jev model, which takes the Workspace over; `'laya'` never does. `labels` comes with a
+ *  Jev model, `checkpoints` with a Laya one. */
+export type TextClassificationStatus = {
+  key: string
+  name: string
+  runtime: 'vllm' | 'laya'
+  state: 'starting' | 'running' | 'stopping'
+  slot: 'primary' | 'pool'
+  labels?: JevLabel[]
+  checkpoints?: string[]
 }
 
 export type ClassifyRequest = {

@@ -5,8 +5,15 @@
 // /status, so "I can't tell" would otherwise read as "nothing loaded" and bounce a deep
 // link the user typed on purpose).
 import { describe, expect, it } from 'vitest'
-import { JEV_PATH, isWorkspaceWorkPath, jevPresence, layaLoaded, workspaceRedirect } from './jev-mode'
-import type { JevInfo, JevStatus, ModelEntry, Status } from './types'
+import {
+  LEGACY_JEV_PATH,
+  TEXT_CLASSIFICATION_PATH,
+  isWorkspaceWorkPath,
+  jevPresence,
+  playgroundAvailable,
+  workspaceRedirect,
+} from './jev-mode'
+import type { JevInfo, JevStatus, ModelEntry, Status, TextClassificationStatus } from './types'
 
 const JEV_INFO: JevInfo = {
   labels: ['contradiction', 'entailment', 'neutral'],
@@ -36,6 +43,18 @@ function model(fields: Partial<ModelEntry>): ModelEntry {
   return fields as ModelEntry
 }
 
+const JEV_TEXT_CLASSIFIER: TextClassificationStatus = {
+  key: LOADED.key, name: LOADED.name, runtime: 'vllm', state: 'running', slot: 'primary', labels: LOADED.labels,
+}
+const LAYA_TEXT_CLASSIFIER: TextClassificationStatus = {
+  key: 'laya|laya|1455', name: 'laya', runtime: 'laya', state: 'running', slot: 'pool', checkpoints: ['english'],
+}
+
+/** What this daemon sends: the per-runtime fields beside the one text classification field. */
+function statusWithTextClassifier(textClassification: TextClassificationStatus): Status {
+  return { textClassification, jev: null, laya: null } as unknown as Status
+}
+
 describe('jevPresence', () => {
   it('reads a loaded Jev model straight off status', () => {
     expect(jevPresence(statusWith(LOADED), undefined)).toBe('loaded')
@@ -63,6 +82,30 @@ describe('jevPresence', () => {
   })
 })
 
+// ADR-444: one status field names the text classification model and its runtime. Only a model on vLLM (a Jev
+// model) takes the Workspace over; a Laya model never does.
+describe('jevPresence with the text classification status', () => {
+  it('is "loaded" for a model on vLLM', () => {
+    expect(jevPresence(statusWithTextClassifier(JEV_TEXT_CLASSIFIER), undefined)).toBe('loaded')
+  })
+
+  it('is "none" for a model on the Laya engine, even with a Jev model in a stale catalog', () => {
+    expect(jevPresence(statusWithTextClassifier(LAYA_TEXT_CLASSIFIER), [model({ jev: JEV_INFO, loaded: true })])).toBe('none')
+  })
+
+  it('is "none" when nothing is loaded, even with an older field saying otherwise', () => {
+    const stale = { textClassification: null, jev: LOADED } as unknown as Status
+    expect(jevPresence(stale, undefined)).toBe('none')
+  })
+})
+
+describe('the playground route', () => {
+  it('is named for text classification, with the Jev one kept for old bookmarks', () => {
+    expect(TEXT_CLASSIFICATION_PATH).toBe('/workspace/text-classification')
+    expect(LEGACY_JEV_PATH).toBe('/workspace/jev')
+  })
+})
+
 describe('isWorkspaceWorkPath', () => {
   it('matches the three work sections and their sub-routes', () => {
     for (const p of ['/workspace/chat', '/workspace/code', '/workspace/routines']) {
@@ -78,7 +121,7 @@ describe('isWorkspaceWorkPath', () => {
   })
 
   it('does not match the playground, bare /workspace, or anything outside it', () => {
-    expect(isWorkspaceWorkPath(JEV_PATH)).toBe(false)
+    expect(isWorkspaceWorkPath(TEXT_CLASSIFICATION_PATH)).toBe(false)
     expect(isWorkspaceWorkPath('/workspace')).toBe(false)
     expect(isWorkspaceWorkPath('/models')).toBe(false)
     expect(isWorkspaceWorkPath('/chat/abc123')).toBe(false)
@@ -87,19 +130,19 @@ describe('isWorkspaceWorkPath', () => {
 
 describe('workspaceRedirect', () => {
   it('sends work routes to the playground, with the notice, while a Jev model is loaded', () => {
-    expect(workspaceRedirect('/workspace/chat', 'loaded')).toEqual({ to: JEV_PATH, notice: true })
-    expect(workspaceRedirect('/workspace/code/abc123', 'loaded')).toEqual({ to: JEV_PATH, notice: true })
-    expect(workspaceRedirect('/workspace/routines/new', 'loaded')).toEqual({ to: JEV_PATH, notice: true })
+    expect(workspaceRedirect('/workspace/chat', 'loaded')).toEqual({ to: TEXT_CLASSIFICATION_PATH, notice: true })
+    expect(workspaceRedirect('/workspace/code/abc123', 'loaded')).toEqual({ to: TEXT_CLASSIFICATION_PATH, notice: true })
+    expect(workspaceRedirect('/workspace/routines/new', 'loaded')).toEqual({ to: TEXT_CLASSIFICATION_PATH, notice: true })
   })
 
   it('leaves the playground itself alone while one is loaded', () => {
-    expect(workspaceRedirect(JEV_PATH, 'loaded')).toBeNull()
-    expect(workspaceRedirect(`${JEV_PATH}/anything`, 'loaded')).toBeNull()
+    expect(workspaceRedirect(TEXT_CLASSIFICATION_PATH, 'loaded')).toBeNull()
+    expect(workspaceRedirect(`${TEXT_CLASSIFICATION_PATH}/anything`, 'loaded')).toBeNull()
   })
 
   it('sends the playground back to chat, without a notice, when none is loaded', () => {
-    expect(workspaceRedirect(JEV_PATH, 'none')).toEqual({ to: '/workspace/chat', notice: false })
-    expect(workspaceRedirect(`${JEV_PATH}/anything`, 'none')).toEqual({ to: '/workspace/chat', notice: false })
+    expect(workspaceRedirect(TEXT_CLASSIFICATION_PATH, 'none')).toEqual({ to: '/workspace/chat', notice: false })
+    expect(workspaceRedirect(`${TEXT_CLASSIFICATION_PATH}/anything`, 'none')).toEqual({ to: '/workspace/chat', notice: false })
   })
 
   it('leaves the work routes alone when none is loaded', () => {
@@ -109,7 +152,7 @@ describe('workspaceRedirect', () => {
 
   it('never redirects on a guess — "unknown" leaves every route where it is', () => {
     expect(workspaceRedirect('/workspace/chat', 'unknown')).toBeNull()
-    expect(workspaceRedirect(JEV_PATH, 'unknown')).toBeNull()
+    expect(workspaceRedirect(TEXT_CLASSIFICATION_PATH, 'unknown')).toBeNull()
     expect(workspaceRedirect('/workspace/code/abc123', 'unknown')).toBeNull()
   })
 
@@ -129,7 +172,7 @@ describe('workspaceRedirect', () => {
 
 describe('workspaceRedirect with a Laya model loaded', () => {
   it('keeps the playground open while a Laya model is loaded and no Jev model is', () => {
-    expect(workspaceRedirect(JEV_PATH, 'none', true)).toBeNull()
+    expect(workspaceRedirect(TEXT_CLASSIFICATION_PATH, 'none', true)).toBeNull()
   })
 
   it('never takes chat, code or routines over: a Laya model runs beside the chat model', () => {
@@ -138,20 +181,30 @@ describe('workspaceRedirect with a Laya model loaded', () => {
   })
 
   it('still sends the playground back to chat when neither kind is loaded', () => {
-    expect(workspaceRedirect(JEV_PATH, 'none', false)).toEqual({ to: '/workspace/chat', notice: false })
+    expect(workspaceRedirect(TEXT_CLASSIFICATION_PATH, 'none', false)).toEqual({ to: '/workspace/chat', notice: false })
   })
 })
 
-describe('layaLoaded', () => {
+describe('playgroundAvailable', () => {
   const LAYA_STATUS = { key: 'laya|laya|1455', name: 'laya', checkpoints: ['english'], state: 'running' as const }
 
+  it('is true for a text classification model on either runtime', () => {
+    expect(playgroundAvailable(statusWithTextClassifier(JEV_TEXT_CLASSIFIER), undefined)).toBe(true)
+    expect(playgroundAvailable(statusWithTextClassifier(LAYA_TEXT_CLASSIFIER), undefined)).toBe(true)
+  })
+
+  it('is false when the text classification status says nothing is loaded, whatever the older fields say', () => {
+    const stale = { textClassification: null, laya: LAYA_STATUS } as unknown as Status
+    expect(playgroundAvailable(stale, [{ laya: { checkpoints: ['english'] }, loaded: true } as unknown as ModelEntry])).toBe(false)
+  })
+
   it('reads the daemon status when it has the field', () => {
-    expect(layaLoaded({ laya: LAYA_STATUS } as unknown as Status, undefined)).toBe(true)
-    expect(layaLoaded({ laya: null } as unknown as Status, [{ laya: { checkpoints: [] }, loaded: true } as unknown as ModelEntry])).toBe(false)
+    expect(playgroundAvailable({ laya: LAYA_STATUS } as unknown as Status, undefined)).toBe(true)
+    expect(playgroundAvailable({ laya: null } as unknown as Status, [{ laya: { checkpoints: [] }, loaded: true } as unknown as ModelEntry])).toBe(false)
   })
 
   it('falls back to the catalog when the status has no laya field', () => {
-    expect(layaLoaded(undefined, [{ laya: { checkpoints: ['english'] }, loaded: true } as unknown as ModelEntry])).toBe(true)
-    expect(layaLoaded(undefined, [{ laya: { checkpoints: ['english'] }, loaded: false } as unknown as ModelEntry])).toBe(false)
+    expect(playgroundAvailable(undefined, [{ laya: { checkpoints: ['english'] }, loaded: true } as unknown as ModelEntry])).toBe(true)
+    expect(playgroundAvailable(undefined, [{ laya: { checkpoints: ['english'] }, loaded: false } as unknown as ModelEntry])).toBe(false)
   })
 })

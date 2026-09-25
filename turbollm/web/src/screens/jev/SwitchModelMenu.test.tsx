@@ -48,6 +48,13 @@ const CHAT = model({ key: 'gemma-27b', name: 'Gemma 27B' })
 const OTHER_JEV = model({ key: 'jev-other', name: 'Other NLI', jev: { ...JEV_INFO, labels: [...JEV_INFO.labels] } })
 const LAYA = model({ key: 'laya', name: 'Laya', laya: { checkpoints: ['english', 'multilingual'] } })
 
+/** The row a model's button sits in: the button and, for a text classification model, its runtime label. */
+function rowOf(name: string): HTMLElement {
+  const row = screen.getByRole('button', { name }).parentElement
+  if (row === null) throw new Error(`The ${name} button is not in a row.`)
+  return row
+}
+
 function renderMenu(models: ModelEntry[], current: JevStatus = CURRENT) {
   const onPick = vi.fn()
   render(<SwitchModelMenu current={current} models={models} onPick={onPick} />)
@@ -63,7 +70,7 @@ describe('SwitchModelMenu', () => {
   it('groups what can be loaded by what it is', () => {
     renderMenu([CHAT, OTHER_JEV])
     expect(screen.getByText('Chat models')).toBeTruthy()
-    expect(screen.getByText('Jev models')).toBeTruthy()
+    expect(screen.getByText('Text classification models')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Gemma 27B' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Other NLI' })).toBeTruthy()
   })
@@ -71,21 +78,25 @@ describe('SwitchModelMenu', () => {
   it('leaves out a group with nothing in it', () => {
     renderMenu([CHAT])
     expect(screen.getByText('Chat models')).toBeTruthy()
-    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Text classification models')).toBeNull()
   })
 
-  // POST /v1/systemone now answers with either a Jev or a Laya model (ADR-439 follow-up), so
-  // the picker offers Laya models too, grouped separately from Jev's own vLLM-served ones.
-  it('also groups Laya models, separately from Jev', () => {
+  // POST /v1/systemone answers with either a Jev or a Laya model (ADR-439 follow-up), and ADR-444 names both
+  // "text classification": one group, each row saying which runtime serves it.
+  it('puts Jev and Laya models in one text classification group', () => {
     renderMenu([CHAT, OTHER_JEV, LAYA])
-    expect(screen.getByText('Jev models')).toBeTruthy()
-    expect(screen.getByText('Laya models')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Laya' })).toBeTruthy()
+    const group = screen.getByRole('group', { name: 'Text classification models' })
+    expect(within(group).getByRole('button', { name: 'Other NLI' })).toBeTruthy()
+    expect(within(group).getByRole('button', { name: 'Laya' })).toBeTruthy()
+    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Laya models')).toBeNull()
   })
 
-  it('leaves out the Laya group when there is nothing in it', () => {
-    renderMenu([CHAT, OTHER_JEV])
-    expect(screen.queryByText('Laya models')).toBeNull()
+  it('labels each text classification row with its runtime, and a chat row with none', () => {
+    renderMenu([CHAT, OTHER_JEV, LAYA])
+    expect(rowOf('Other NLI').textContent).toBe('Other NLIvLLM')
+    expect(rowOf('Laya').textContent).toBe('LayaLaya engine')
+    expect(rowOf('Gemma 27B').textContent).toBe('Gemma 27B')
   })
 
   it('offers only models that could actually load right now', () => {
@@ -102,7 +113,7 @@ describe('SwitchModelMenu', () => {
 
   it('does not offer the model that is already loaded', () => {
     renderMenu([CHAT, model({ key: CURRENT.key, name: CURRENT.name, jev: { ...JEV_INFO, labels: [...JEV_INFO.labels] }, loaded: true })])
-    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Text classification models')).toBeNull()
     expect(screen.queryByRole('button', { name: CURRENT.name })).toBeNull()
   })
 
@@ -112,7 +123,7 @@ describe('SwitchModelMenu', () => {
     renderMenu([model({ key: 'gguf', name: 'Wrong format', compatibleWithActiveEngine: false })])
     expect(screen.getByText('Nothing else here can load on the active engine. Change it on the Engines screen.')).toBeTruthy()
     expect(screen.queryByText('Chat models')).toBeNull()
-    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Text classification models')).toBeNull()
   })
 
   it('says nothing of the sort once there is something to pick', () => {

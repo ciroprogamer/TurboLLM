@@ -115,6 +115,8 @@ import {
   startEngine,
   stopEngine,
   type DaemonSettingsPatch,
+  type HfSearchCategory,
+  type HfSearchRows,
   type McpServer,
   type CustomAgent,
   type BuiltinAgentOverride,
@@ -139,7 +141,6 @@ import type {
   EnginesList,
   UpdatePolicy,
   HfRepoDetail,
-  HfSearchResult,
   HfSortOption,
   HwUsage,
   LoadProfile,
@@ -902,14 +903,20 @@ export function useConnect(cli: string) {
 
 // ── Hugging Face discovery (spec 10 §2–4, §7 rewrite) ────────────────────────
 /** Search (q set) or browse (q blank — replaces the old hardcoded "Featured" list)
- *  HF repos, sorted by `sort`. Always enabled: DiscoverTab shows this list whether or
- *  not the user has typed a query, so there's no empty-query gate to disable it. */
-export function useHfSearch(q: string, sort: HfSortOption = 'best-match'): UseQueryResult<HfSearchResult> {
+ *  HF repos, sorted by `sort`, from the engine's list or from `category` (ADR-444). Always
+ *  enabled: DiscoverTab shows this list whether or not the user has typed a query, so
+ *  there's no empty-query gate to disable it. */
+export function useHfSearch(
+  q: string,
+  sort: HfSortOption = 'best-match',
+  category?: HfSearchCategory,
+): UseQueryResult<HfSearchRows> {
   return useQuery({
-    queryKey: ['hf-search', q, sort],
-    queryFn: () => hfSearch(q, sort),
+    queryKey: ['hf-search', q, sort, category],
+    queryFn: () => hfSearch(q, sort, category),
     retry: false,
-    placeholderData: (prev) => prev,
+    // Previous rows stand in only within one list: across a category switch they are the other list's.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[3] === category ? prev : undefined),
   })
 }
 

@@ -7,6 +7,7 @@
 import { ApiError, track } from '../../lib/api'
 import type { LoadOptions, LoadTarget } from '../../lib/model-loader'
 import { isSystemOneModel } from '../../lib/model-kind'
+import { TextClassificationRuntimeLabel } from '../../components/TextClassificationRuntimeLabel'
 import { toast } from '../../components/ui/sonner'
 import type { LoadedJev, ModelEntry } from '../../lib/types'
 
@@ -35,8 +36,7 @@ export function SwitchModelMenu({
       ) : (
         <>
           <ModelGroup title="Chat models" models={loadable.filter((m) => !isSystemOneModel(m))} onPick={onPick} />
-          <ModelGroup title="Jev models" models={loadable.filter((m) => m.jev)} onPick={onPick} />
-          <ModelGroup title="Laya models" models={loadable.filter((m) => m.laya)} onPick={onPick} />
+          <ModelGroup title="Text classification models" models={loadable.filter((m) => isSystemOneModel(m))} onPick={onPick} />
         </>
       )}
     </div>
@@ -85,14 +85,17 @@ function ModelGroup({ title, models, onPick }: { title: string; models: ModelEnt
     <div className="flex flex-col gap-1" role="group" aria-label={title}>
       <span className="text-[12px] font-medium text-muted">{title}</span>
       {models.map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => onPick(m)}
-          className="rounded px-2 py-1 text-left text-[13px] text-ink hover:bg-panel-2"
-        >
-          {m.name}
-        </button>
+        // The runtime label sits outside the button, so the button is still named for the model alone.
+        <div key={m.key} className="flex items-center gap-2 pr-2">
+          <button
+            type="button"
+            onClick={() => onPick(m)}
+            className="flex-1 rounded px-2 py-1 text-left text-[13px] text-ink hover:bg-panel-2"
+          >
+            {m.name}
+          </button>
+          <TextClassificationRuntimeLabel model={m} />
+        </div>
       ))}
     </div>
   )

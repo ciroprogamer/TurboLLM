@@ -14,7 +14,7 @@ import { UnreachableOverlay } from './components/UnreachableOverlay'
 import { AuthGate } from './components/AuthGate'
 import { JevLoadConfirmHost } from './components/JevLoadConfirmHost'
 import { useStatus, useSettings, useDownloads, useModels } from './lib/queries'
-import { jevPresence, layaLoaded, workspaceRedirect } from './lib/jev-mode'
+import { LEGACY_JEV_PATH, TEXT_CLASSIFICATION_PATH, jevPresence, playgroundAvailable, workspaceRedirect } from './lib/jev-mode'
 import { useJevLoadedToast } from './lib/model-loader'
 import { useUiStore } from './stores/ui'
 import { useOnboardingState } from './lib/onboarding-queries'
@@ -75,8 +75,9 @@ function CodeGate({ children }: { children: ReactNode }) {
 /** ADR-434 (b), (i)(1): a Jev model is an NLI classifier, not a chat model — it cannot answer a
  *  chat, a Code turn or a routine at all. So while one is loaded, Workspace collapses to its one
  *  usable surface, and every other Workspace route redirects into the playground carrying the
- *  notice that says why. It works in reverse too: with no Jev model loaded, the playground's own
- *  URL goes back to Chat (a bookmark, or the page you were on when the model was ejected).
+ *  notice that says why. It works in reverse too: with no text classification model loaded, the
+ *  playground's own URL goes back to Chat (a bookmark, or the page you were on when the model was
+ *  ejected). A Laya model opens the playground without taking the Workspace over (ADR-443).
  *
  *  A pathless layout route rather than a per-route wrapper: the rule is about the whole
  *  /workspace/* section, and declaring it once is what stops a route added later from quietly
@@ -88,9 +89,14 @@ export function WorkspaceModeGate() {
   const modelsQ = useModels()
   const { pathname } = useLocation()
   const models = modelsQ.data?.models
-  const redirect = workspaceRedirect(pathname, jevPresence(statusQ.data, models), layaLoaded(statusQ.data, models))
+  const redirect = workspaceRedirect(pathname, jevPresence(statusQ.data, models), playgroundAvailable(statusQ.data, models))
   if (!redirect) return <Outlet />
-  return <Navigate to={redirect.to} replace state={{ jevNotice: redirect.notice }} />
+  return <Navigate to={redirect.to} replace state={{ takeoverNotice: redirect.notice }} />
+}
+
+/** The playground's URL before ADR-444, kept so a bookmark of it still lands on the playground. */
+export function LegacyPlaygroundRedirect() {
+  return <Navigate to={TEXT_CLASSIFICATION_PATH} replace />
 }
 
 /** Onboarding entry predicate (spec 25 §3): redirects to `/onboarding` while
@@ -303,9 +309,11 @@ export function App() {
             {/* Back-compat: the old Workspace → Agent tab is gone; land on Chat instead. */}
             <Route path="/workspace/agent" element={<Navigate to="/workspace/chat" replace />} />
             <Route path="/workspace/agent/:convId" element={<Navigate to="/workspace/chat" replace />} />
-            {/* Workspace's only mode while a Jev model is loaded (ADR-434 (b)). Inside the gate
-                so that reaching it with nothing Jev loaded lands on Chat instead. */}
-            <Route path="/workspace/jev" element={<JevPlaygroundScreen />} />
+            {/* Workspace's only mode while a Jev model is loaded (ADR-434 (b)), and a page beside
+                chat while a Laya model is (ADR-443). Inside the gate so that reaching it with no text
+                classification model loaded lands on Chat instead. */}
+            <Route path={TEXT_CLASSIFICATION_PATH} element={<JevPlaygroundScreen />} />
+            <Route path={LEGACY_JEV_PATH} element={<LegacyPlaygroundRedirect />} />
             </Route>
             {/* Back-compat: /chat → Workspace; /chat/:convId stays a standalone view
                 so existing LAN share links (baked as /chat/<id>) keep working. */}

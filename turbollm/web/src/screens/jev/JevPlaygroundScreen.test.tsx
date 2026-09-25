@@ -95,7 +95,7 @@ function jevModel(over: Partial<ModelEntry> = {}): ModelEntry {
 
 function renderScreen(notice = false) {
   return render(
-    <MemoryRouter initialEntries={[{ pathname: '/workspace/jev', state: notice ? { jevNotice: true } : undefined }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/workspace/text-classification', state: notice ? { takeoverNotice: true } : undefined }]}>
       <JevPlaygroundScreen />
     </MemoryRouter>,
   )
@@ -204,10 +204,10 @@ describe('JevPlaygroundScreen', () => {
 
   it('explains why Chat, Code and Routines are gone, but only when it redirected the user', () => {
     const { unmount } = renderScreen(true)
-    expect(screen.getByText('Chat, Code and Routines are unavailable while a Jev model is loaded.')).toBeInTheDocument()
+    expect(screen.getByText('Chat, Code and Routines are unavailable while a text classification model is loaded.')).toBeInTheDocument()
     unmount()
     renderScreen()
-    expect(screen.queryByText('Chat, Code and Routines are unavailable while a Jev model is loaded.')).toBeNull()
+    expect(screen.queryByText('Chat, Code and Routines are unavailable while a text classification model is loaded.')).toBeNull()
   })
 
   it('switches away through the menu, ejecting the pool slot first', async () => {

@@ -23,7 +23,28 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **A "Text classification" category in Models → Discover.** Jev (NLI) and Laya models are both text classification
+  models, so one chip beside the sort menu now finds both, whichever chat engine is active. It lists only what
+  TurboLLM can run: a Laya bundle, or an NLI cross-encoder confirmed from its own `config.json`. Sentiment and
+  toxicity classifiers, and repos with no `.safetensors` weights, are left out. Each row shows the runtime it loads on
+  (Laya engine or vLLM).
+- `GET /v1/models` marks these models with `"task": "text-classification"`. `kind` (`jev` or `laya`) is unchanged.
+  `GET /api/v1/status` gains `textClassification`, beside `jev` and `laya`.
+
+### Changed
+
+- **Jev and Laya are now presented as one thing, "text classification".** The playground, the Models badge, the
+  ready toast, the switch-model menu and the error messages all say so. The playground moved to
+  `/workspace/text-classification`; the old `/workspace/jev` address redirects to it. A Jev model still takes the
+  Workspace over while it is loaded, and a Laya model still loads beside your chat model.
+
+### Fixed
+
+- **A Laya model could be picked where a chat model is required.** A routine and the `create_routine` tool refused a
+  Jev model but accepted a Laya one, `turbollm launch` (also with `--model`) offered a Laya model to a coding agent,
+  and `list_models` didn't mark it. All of them now treat both as text classification models.
 
 ## [1.14.1] - 2026-09-25
 

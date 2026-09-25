@@ -1,14 +1,24 @@
 // Which loaded model the System One playground runs against (ADR-443): the Jev model when one is loaded, since it
-// owns the Workspace, otherwise the Laya model. Status is the authority; the models list is the fallback for a
-// client that cannot read /status (ADR-422).
-import type { LayaStatus, LoadedJev, ModelEntry, Status } from './types'
+// owns the Workspace, otherwise the Laya model. Status is the authority — its one text classification field first
+// (ADR-444), then the per-runtime fields of an older daemon; the models list is the fallback for a client that
+// cannot read /status (ADR-422).
+import type { LayaStatus, LoadedJev, ModelEntry, Status, TextClassificationStatus } from './types'
 
 export function loadedSystemOneModel(status: Status | undefined, models: ModelEntry[] | undefined): LoadedJev | null {
+  if (status && 'textClassification' in status) {
+    return status.textClassification ? fromTextClassificationStatus(status.textClassification) : null
+  }
   if (status && 'jev' in status) {
     if (status.jev) return status.jev
     return status.laya ? fromLayaStatus(status.laya) : null
   }
   return fromCatalog(models ?? [])
+}
+
+function fromTextClassificationStatus(model: TextClassificationStatus): LoadedJev {
+  const { key, name, state, slot } = model
+  if (model.runtime === 'laya') return { key, name, labels: [], checkpoints: model.checkpoints ?? [], state, slot }
+  return { key, name, labels: model.labels ?? [], state, slot }
 }
 
 /** A Laya model has no labels of its own (its questions carry them) and is always in its own pool slot. */

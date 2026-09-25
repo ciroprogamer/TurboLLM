@@ -28,7 +28,8 @@ import { useOnboardingState } from '../lib/onboarding-queries'
 import { usePinnedModels } from '../lib/usePinnedModels'
 import { useDocumentScroll } from '../lib/scroll-mode'
 import type { ModelEntry } from '../lib/types'
-import { isChatModel } from '../lib/model-kind'
+import { isChatModel, isSystemOneModel } from '../lib/model-kind'
+import { TextClassificationRuntimeLabel } from '../components/TextClassificationRuntimeLabel'
 import { cn } from '../lib/utils'
 import { useIsDesktop } from '../lib/useIsDesktop'
 import { EmptyState, InlineError, ScreenHeader } from '../components/common'
@@ -121,10 +122,10 @@ function groupModels(models: ModelEntry[], isPinned: (key: string) => boolean): 
   return [...groups.filter(isGroupPinned), ...groups.filter((g) => !isGroupPinned(g))]
 }
 
-/** Hidden by the engine filter — which a Jev model never is (ADR-434 (g)): it stays on the
- *  list as unavailable, so it is not something "Show all" reveals. */
+/** Hidden by the engine filter — which a text classification model never is (ADR-434 (g), ADR-444):
+ *  it stays on the list as unavailable, so it is not something "Show all" reveals. */
 function hiddenByEngine(m: ModelEntry): boolean {
-  return !m.compatibleWithActiveEngine && !m.jev
+  return !m.compatibleWithActiveEngine && !isSystemOneModel(m)
 }
 
 export function ModelsScreen() {
@@ -804,8 +805,7 @@ function ModelRow({
   // that's ALSO Vision+MoE (common for the bigger models that carry a NextN head) always had
   // its NextN tag silently crowded out despite the NextN filter/count already finding it.
   const caps = [
-    m.jev && 'Jev',
-    m.laya && 'Laya',
+    isSystemOneModel(m) && 'Text classification',
     (m.nextnLayers ?? 0) > 0 && 'NextN',
     m.embedding && 'Embed',
     m.vision && 'Vision',
@@ -826,6 +826,7 @@ function ModelRow({
         {caps.slice(0, 2).map((c) => (
           <CapChip key={c}>{c}</CapChip>
         ))}
+        <TextClassificationRuntimeLabel model={m} />
         {m.hasProfile && <CapChip>tuned</CapChip>}
         {problem && (
           <span

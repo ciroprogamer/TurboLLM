@@ -1,7 +1,7 @@
 // The one way the UI loads a local model (ADR-434 (i)(3)).
 //
-// A chat model loads exactly as it always has. A Jev model unloads whatever is running and
-// takes Workspace over, so it asks first — but only when something really is running, the same
+// A chat model loads exactly as it always has. A text classification model on vLLM (a Jev model)
+// unloads whatever is running and takes Workspace over, so it asks first — but only when something really is running, the same
 // "active work, not an open window" rule as the daemon-restart gate. When the daemon cannot be
 // asked, it fails OPEN to the confirmation: "I couldn't check" is not "nothing is running".
 import { useEffect } from 'react'
@@ -10,9 +10,10 @@ import { toast } from '../components/ui/sonner'
 import { useJevLoadStore, type LoadOptions, type LoadTarget } from '../stores/jev-load'
 import { track } from './api'
 import { getActivity } from './jev-api'
-import { JEV_PATH } from './jev-mode'
+import { TEXT_CLASSIFICATION_PATH } from './jev-mode'
+import { textClassificationRuntime } from './model-kind'
 import { useModelActions, useStatus } from './queries'
-import type { ActiveWork } from './types'
+import type { ActiveWork, Status } from './types'
 
 export type { LoadOptions, LoadTarget }
 
@@ -44,10 +45,11 @@ export function useModelLoader(): {
   }
 
   function requestLoad(target: LoadTarget, opts: LoadOptions = {}): void {
-    if (target.jev) void askBeforeJevLoad(target, opts)
-    // A Laya model runs in its own slot beside whatever is loaded, so there is nothing to ask about; it still
-    // claims the "is ready" toast, which is how the user finds the playground (ADR-443).
-    else if (target.laya) startJevLoad(target, opts)
+    const runtime = textClassificationRuntime(target)
+    if (runtime === 'vllm') void askBeforeJevLoad(target, opts)
+    // The Laya engine runs in its own slot beside whatever is loaded, so there is nothing to ask about; the load
+    // still claims the "is ready" toast, which is how the user finds the playground (ADR-443).
+    else if (runtime === 'laya') startJevLoad(target, opts)
     else startLoad(target, opts)
   }
 
@@ -102,27 +104,33 @@ function useLoadStarters(): {
 export function useJevLoadedToast(): void {
   const pendingJevKey = useJevLoadStore((s) => s.pendingJevKey)
   const setPendingJevKey = useJevLoadStore((s) => s.setPendingJevKey)
-  const status = useStatus().data
-  const jev = status?.jev ?? status?.laya
+  const pending = aliveTextClassifier(useStatus().data, pendingJevKey)
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (!pendingJevKey || jev?.key !== pendingJevKey || jev.state !== 'running') return
+    if (pending?.state !== 'running') return
     // Clearing first is what makes this fire exactly once: the next poll finds no pending key.
     setPendingJevKey(null)
-    if (pathname === JEV_PATH) return
-    toast.success(`${jev.name} is ready`, {
+    if (pathname === TEXT_CLASSIFICATION_PATH) return
+    toast.success(`${pending.name} is ready`, {
       action: {
-        // A Laya model is not a Jev model, and the playground it opens is the same one (ADR-443).
-        label: status?.jev ? 'Open Jev Playground' : 'Open playground',
+        label: 'Open playground',
         onClick: () => {
           track('models', 'open_jev_playground_toast')
-          navigate(JEV_PATH)
+          navigate(TEXT_CLASSIFICATION_PATH)
         },
       },
     })
-  }, [pendingJevKey, jev, setPendingJevKey, pathname, navigate])
+  }, [pending, setPendingJevKey, pathname, navigate])
+}
+
+/** The alive text classification model with this key. The one status field names only the model that owns the
+ *  Workspace when a Jev and a Laya model are both alive (ADR-444), so a Laya load beside a Jev model is found in
+ *  the per-runtime fields. */
+function aliveTextClassifier(status: Status | undefined, key: string | null) {
+  if (!status || !key) return undefined
+  return [status.textClassification, status.jev, status.laya].find((model) => model?.key === key)
 }
 
 /** null when the daemon could not be asked — the caller treats that as "ask the user". */

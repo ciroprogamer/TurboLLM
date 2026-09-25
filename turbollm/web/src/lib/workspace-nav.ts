@@ -12,17 +12,18 @@
 // session", not a durable cross-session preference like theme/fontSize (stores/ui.ts). A fresh
 // browser session starts clean on Chat, same as today.
 
-import { JEV_PATH } from './jev-mode'
+import { LEGACY_JEV_PATH, TEXT_CLASSIFICATION_PATH } from './jev-mode'
 
 const KEY = 'tllm.workspace.lastPath'
 const DEFAULT_PATH = '/workspace/chat'
+const PLAYGROUND_PATHS = [TEXT_CLASSIFICATION_PATH, LEGACY_JEV_PATH]
 
 /** The /workspace/* path to return to. Falls back to plain Chat when nothing's been recorded yet
  *  (fresh session) or storage is unavailable (private browsing). */
 export function getLastWorkspacePath(): string {
   try {
     const v = sessionStorage.getItem(KEY)
-    return v && v.startsWith('/workspace/') && !isJevPlayground(v) ? v : DEFAULT_PATH
+    return v && v.startsWith('/workspace/') && !isPlayground(v) ? v : DEFAULT_PATH
   } catch {
     return DEFAULT_PATH
   }
@@ -31,7 +32,7 @@ export function getLastWorkspacePath(): string {
 /** Call on every route change (Shell.tsx). No-op for anything outside /workspace — leaving
  *  Workspace for another section must not overwrite what was remembered there. */
 export function rememberWorkspacePath(pathname: string): void {
-  if (!pathname.startsWith('/workspace/') || isJevPlayground(pathname)) return
+  if (!pathname.startsWith('/workspace/') || isPlayground(pathname)) return
   try {
     sessionStorage.setItem(KEY, pathname)
   } catch {
@@ -46,10 +47,11 @@ export function resolveNavTarget(to: string): string {
   return to === '/workspace' ? getLastWorkspacePath() : to
 }
 
-/** ADR-434 (i)(2): the Jev Playground is a /workspace/* route, but it exists only while a Jev
- *  model is loaded. Remembering it would trap the user — unloading the model would send them
- *  back to a route that immediately redirects, instead of the chat or session they left. Both
- *  the write and the read reject it, so a value stored by an older build is ignored too. */
-function isJevPlayground(pathname: string): boolean {
-  return pathname === JEV_PATH || pathname.startsWith(`${JEV_PATH}/`)
+/** ADR-434 (i)(2): the text classification playground is a /workspace/* route, but it exists only
+ *  while such a model is loaded. Remembering it would trap the user — unloading the model would
+ *  send them back to a route that immediately redirects, instead of the chat or session they left.
+ *  Both the write and the read reject it, at its old Jev URL too (ADR-444), so a value stored by
+ *  an older build is ignored as well. */
+function isPlayground(pathname: string): boolean {
+  return PLAYGROUND_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))
 }

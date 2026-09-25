@@ -9,10 +9,10 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import { Link2, Lock, Search } from 'lucide-react'
-import { ApiError, track } from '../../lib/api'
+import { ApiError, track, type HfSearchCategory, type HfSearchRow, type TextClassificationRuntime } from '../../lib/api'
 import { useHfSearch, useSysInfo } from '../../lib/queries'
-import type { HfSearchItem, HfSortOption } from '../../lib/types'
-import { fitBudgetMb, repoFitsHardware } from '../../lib/vram'
+import type { HfSortOption } from '../../lib/types'
+import { fitBudgetMb, searchRowFitsHardware } from '../../lib/vram'
 import { requiredMb } from '../../lib/onboarding-pick'
 import { isAndroidOs } from '../../lib/platform'
 import { EmptyState, InlineError } from '../../components/common'
@@ -63,6 +63,13 @@ const SORT_LABEL: Record<HfSortOption, string> = {
   created: 'Newest',
 }
 
+const TEXT_CLASSIFICATION_SCOPE = 'Laya and Jev models TurboLLM can run, whichever engine is active'
+
+const RUNTIME_LABEL: Record<TextClassificationRuntime, string> = {
+  laya: 'Laya engine',
+  vllm: 'vLLM',
+}
+
 // List/detail split width — persisted like ModelDetailDialog's config-panel width, but
 // as a plain in-flow flex-basis (not a CSS var pinned against the app shell), since this
 // resizes two siblings on the same page rather than a docked panel.
@@ -85,6 +92,7 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
   const [sort, setSort] = useState<HfSortOption>('trending')
+  const [category, setCategory] = useState<HfSearchCategory>()
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -117,7 +125,7 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
   // "Trending" — while the query and the <select> both use the effective value.
   const effectiveSort: HfSortOption = !searching && sort === 'best-match' ? 'trending' : sort
 
-  const searchQ = useHfSearch(debounced, effectiveSort)
+  const searchQ = useHfSearch(debounced, effectiveSort, category)
   const unreachable = searchQ.error instanceof ApiError && searchQ.error.code === 'hf_unreachable'
   const allResults = searchQ.data?.results ?? []
   const sortOptions: HfSortOption[] = searching
@@ -140,15 +148,17 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
   // retries). Hide the control entirely rather than show a checkbox that filters nothing.
   const canFilterByFit = budgetMb > 0
   const fitsOnly = canFilterByFit && (fitsOnlyOverride ?? !!sys?.os.startsWith('android'))
-  // repoFitsHardware — see its own doc comment for why 'unknown' must be hidden, not shown.
-  const fitFiltered = fitsOnly ? allResults.filter((r) => repoFitsHardware(r.repo, budgetMb)) : allResults
+  // repoFitsHardware — see its own doc comment for why 'unknown' must be hidden, not shown, and
+  // searchRowFitsHardware's for why a Text classification row never is.
+  const fitFiltered = fitsOnly ? allResults.filter((r) => searchRowFitsHardware(r, budgetMb)) : allResults
   const hiddenByFit = allResults.length - fitFiltered.length
 
   // Curated picks pin to the top of the list on Android, browsing only (not mid-search — once
   // the user has typed a name they want THAT search's results, not a fixed banner mixed in).
   // See ANDROID_CURATED_PICKS's own comment for why this exists. Excluded from the live list
-  // below so a repo that happens to also be trending never renders twice on screen.
-  const showCurated = !searching && isAndroidOs(sys?.os ?? '')
+  // below so a repo that happens to also be trending never renders twice on screen. They are chat
+  // models, so they have no place above the Text classification category either.
+  const showCurated = !searching && !category && isAndroidOs(sys?.os ?? '')
   // Same requiredMb the onboarding fallback ladder uses: a curated list that recommended
   // something the viewer's own device can't hold would be the exact bug ADR-402 just fixed,
   // one level up. `budgetMb > 0` is already guaranteed by canFilterByFit/showCurated's own
@@ -175,7 +185,7 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search models by name or author…"
+                placeholder={category ? 'Search Laya and Jev models…' : 'Search models by name or author…'}
                 className="pl-9"
               />
             </div>
@@ -208,15 +218,21 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
                 {fitsOnly && hiddenByFit > 0 && <span className="text-faint">· {hiddenByFit} hidden</span>}
               </label>
             )}
-            <select
-              value={effectiveSort}
-              onChange={(e) => setSort(e.target.value as HfSortOption)}
-              className="ml-auto rounded-md border border-border bg-bg px-2 py-1 text-[12px] text-ink outline-none"
-            >
-              {sortOptions.map((s) => (
-                <option key={s} value={s}>{SORT_LABEL[s]}</option>
-              ))}
-            </select>
+            <div className="ml-auto flex items-center gap-2">
+              <TextClassificationToggle
+                on={!!category}
+                onToggle={() => setCategory(category ? undefined : 'text-classification')}
+              />
+              <select
+                value={effectiveSort}
+                onChange={(e) => setSort(e.target.value as HfSortOption)}
+                className="rounded-md border border-border bg-bg px-2 py-1 text-[12px] text-ink outline-none"
+              >
+                {sortOptions.map((s) => (
+                  <option key={s} value={s}>{SORT_LABEL[s]}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {curatedPicks.length > 0 && (
@@ -260,9 +276,11 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
                 message={
                   hiddenByFit > 0
                     ? `None of the ${hiddenByFit} results fit this machine's memory. Untick “Fits my hardware” to see them.`
-                    : searching
-                      ? `No models found for “${debounced}”.`
-                      : 'No models found.'
+                    : category
+                      ? noTextClassifiersMessage(debounced)
+                      : searching
+                        ? `No models found for “${debounced}”.`
+                        : 'No models found.'
                 }
               />
             ) : (
@@ -338,6 +356,31 @@ export function DiscoverTab({ presetQuery = '' }: { presetQuery?: string }) {
   )
 }
 
+/** Discover's "Text classification" category chip (ADR-444), beside the sort. */
+function TextClassificationToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onToggle}
+      title={TEXT_CLASSIFICATION_SCOPE}
+      className="inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[12px] font-medium transition-colors"
+      style={{
+        borderColor: on ? 'var(--accent)' : 'var(--border)',
+        background: on ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+        color: on ? 'var(--accent)' : 'var(--muted)',
+      }}
+    >
+      Text classification
+    </button>
+  )
+}
+
+function noTextClassifiersMessage(query: string): string {
+  const nothingFound = query ? `No text classification models found for “${query}”.` : 'No text classification models found.'
+  return `${nothingFound} This category lists ${TEXT_CLASSIFICATION_SCOPE}.`
+}
+
 /** Thin drag handle between the list and detail pane; resizes the list column live via
  *  direct style mutation (same pattern as ModelDetailDialog's ConfigResizeHandle — avoids
  *  a React re-render per pointer-move pixel), then commits + persists the final width on
@@ -389,13 +432,13 @@ function SplitResizeHandle({
 }
 
 /** Shared visual shell for a left-list row: monogram avatar, selection highlight,
- *  a title line (with gated lock + in-library chip), and a secondary line below. */
+ *  a title line (with gated lock), a secondary line below, and its chips under that. */
 function ListRow({
   repo,
   title,
   secondary,
   gated,
-  inLibrary,
+  chips,
   selected,
   onSelect,
 }: {
@@ -403,7 +446,7 @@ function ListRow({
   title: string
   secondary: string
   gated?: boolean
-  inLibrary?: ReactNode
+  chips?: ReactNode
   selected: boolean
   onSelect: () => void
 }) {
@@ -426,7 +469,7 @@ function ListRow({
           <span className="truncate text-[13px] font-medium text-ink">{title}</span>
         </div>
         <p className="mt-0.5 truncate text-[11px] text-muted">{secondary}</p>
-        {inLibrary && <div className="mt-1">{inLibrary}</div>}
+        {chips && <div className="mt-1 flex flex-wrap items-center gap-1">{chips}</div>}
       </div>
     </button>
   )
@@ -437,18 +480,25 @@ function ResultListRow({
   selected,
   onSelect,
 }: {
-  item: HfSearchItem
+  item: HfSearchRow
   selected: boolean
   onSelect: () => void
 }) {
   const secondary = `${fmtCount(item.downloads)} downloads · ${fmtCount(item.likes)} likes${item.updatedAt ? ` · updated ${fmtDate(item.updatedAt)}` : ''}`
+  const runtime = item.textClassification?.runtime
+  const inLibrary = item.localCount > 0
   return (
     <ListRow
       repo={item.repo}
       title={item.repo}
       secondary={secondary}
       gated={item.gated}
-      inLibrary={item.localCount > 0 ? <InLibraryChip count={item.localCount} /> : undefined}
+      chips={(runtime || inLibrary) && (
+        <>
+          {runtime && <RuntimeLabel runtime={runtime} />}
+          {inLibrary && <InLibraryChip count={item.localCount} />}
+        </>
+      )}
       selected={selected}
       onSelect={onSelect}
     />
@@ -485,6 +535,18 @@ function InLibraryChip({ count }: { count: number }) {
       style={{ color: 'var(--ok)', background: 'color-mix(in srgb, var(--ok) 14%, transparent)' }}
     >
       {`↓ ${count} in library`}
+    </span>
+  )
+}
+
+/** Quiet label naming the engine a Text classification row loads on (ADR-444). */
+function RuntimeLabel({ runtime }: { runtime: TextClassificationRuntime }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+      style={{ color: 'var(--muted)', background: 'color-mix(in srgb, var(--muted) 14%, transparent)' }}
+    >
+      {RUNTIME_LABEL[runtime]}
     </span>
   )
 }

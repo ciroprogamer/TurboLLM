@@ -166,14 +166,15 @@ describe('DeveloperScreen — API reference', () => {
     expect(paths).toEqual(['/v1/chat/completions', '/v1/messages', '/v1/embeddings', '/v1/systemone', '/v1/classify', '/v1/rerank', '/v1/models'])
   })
 
-  it('describes /v1/systemone as answering questions about content', async () => {
+  // ADR-444: /v1/systemone answers with a text classification model on either runtime; the other two are Jev's.
+  it('describes /v1/systemone as text classification on either runtime, answering questions about content', async () => {
     await renderApiReferenceOpen()
-    expect(screen.getByText('Jev: answer questions about content')).toBeInTheDocument()
+    expect(screen.getByText('Text classification (Jev or Laya): answer questions about content')).toBeInTheDocument()
   })
 
-  it('describes the two Jev endpoints in one line each', async () => {
+  it('describes the two Jev-only endpoints in one line each, naming the runtime', async () => {
     await renderApiReferenceOpen()
-    expect(screen.getByText('Jev: label premise/hypothesis pairs')).toBeInTheDocument()
-    expect(screen.getByText('Jev: rerank documents')).toBeInTheDocument()
+    expect(screen.getByText('Jev only (NLI on vLLM): label premise/hypothesis pairs')).toBeInTheDocument()
+    expect(screen.getByText('Jev only (NLI on vLLM): rerank documents')).toBeInTheDocument()
   })
 })

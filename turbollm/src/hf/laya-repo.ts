@@ -16,6 +16,12 @@ export function isLayaEngineRepo(m: Pick<RawSearchItem, 'library_name'>): boolea
   return m.library_name === 'transformers' || m.library_name === 'laya'
 }
 
+/** A repo that names some other library (MLX, ONNX, CoreML, ggmlc) is a port of a Laya checkpoint that the PyTorch
+ *  engine cannot load. One that names no library has always been offered as Laya, so it still is. */
+export function isOtherRuntimePort(m: Pick<RawSearchItem, 'library_name'>): boolean {
+  return m.library_name !== undefined && !isLayaEngineRepo(m)
+}
+
 /** A Laya repo has the decision-head config and the weights at its root. */
 export function isLayaRepo(tree: readonly RawTreeEntry[]): boolean {
   const rootFiles = new Set(tree.filter((e) => e.type === 'file').map((e) => e.path))

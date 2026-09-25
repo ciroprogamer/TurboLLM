@@ -104,6 +104,19 @@ test('getRepo: a Laya-shaped MLX port is not marked laya, so it cannot be downlo
   }, { library_name: 'mlx' })
 })
 
+// A Laya-shaped repo that names no library (Luni/laya-grounded) has always downloaded as a Laya model; only a repo
+// that names ANOTHER library is a port the engine cannot load.
+test('getRepo: a Laya-shaped repo that names no library is still marked laya', async () => {
+  const tree: TreeEntry[] = [
+    { type: 'file', path: 'rl_agent_config.json', size: 5 },
+    { type: 'file', path: 'model.safetensors', lfs: { oid: 'x', size: 808 } },
+    { type: 'file', path: 'encoder/config.json', size: 20 },
+  ]
+  await withRepo(tree, async () => {
+    assert.equal((await client().getRepo('Luni/laya-grounded')).laya, true)
+  })
+})
+
 test('getRepo: an ordinary safetensors repo is not marked laya', async () => {
   const tree: TreeEntry[] = [
     { type: 'file', path: 'config.json', size: 100 },

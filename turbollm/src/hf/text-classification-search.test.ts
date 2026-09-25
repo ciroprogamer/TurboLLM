@@ -271,6 +271,27 @@ test('one search reads at most 8 configs, for the first candidates in order; lat
   })
 })
 
+// Found live 2026-09-25: sorted by downloads, the first 8 candidates were rerankers, guards and sentiment models, and
+// every real NLI model was dropped unread, so the category came back empty.
+test('the 8 config reads go first to repos Hugging Face tags nli, not to the sentiment models that outrank them', async () => {
+  const sentiment = Array.from({ length: 10 }, (_, i) => rootClassifier(`acme/sentiment-${i}`, { downloads: 1000 - i, tags: ['sentiment'] }))
+  const nli = rootClassifier('tasksource/deberta-nli', { downloads: 10, tags: ['nli'] })
+  await withHf({ textClassification: sentiment, nli: [nli], configs: { 'tasksource/deberta-nli/config.json': nliConfig() } }, async (urls) => {
+    const found = await client().searchTextClassification('', 'downloads')
+
+    assert.deepEqual(found.map((r) => r.repo), ['tasksource/deberta-nli'])
+    assert.equal(configFetches(urls).length, 8)
+  })
+})
+
+test('an MLX-quantised classifier is no candidate: vLLM cannot load it', async () => {
+  const mlx = rootClassifier('IAMIbrahim/von-1.0-mlx', { library_name: 'mlx', tags: ['nli'] })
+  await withHf({ nli: [mlx], configs: { 'IAMIbrahim/von-1.0-mlx/config.json': nliConfig() } }, async (urls) => {
+    assert.deepEqual(await client().searchTextClassification('von'), [])
+    assert.deepEqual(configFetches(urls), [])
+  })
+})
+
 test('a failed listing leaves the others to answer', async () => {
   await withHf({ textClassification: 500, nli: 429, laya: [LAYA] }, async () => {
     const found = await client().searchTextClassification('laya')

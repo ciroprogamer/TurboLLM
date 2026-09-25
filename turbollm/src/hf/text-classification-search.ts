@@ -99,10 +99,16 @@ function descending(a: number | string, b: number | string): number {
 /** Pure. From the listing alone: a Laya bundle, or an NLI candidate and the checkpoint folder whose config decides
  *  it. */
 export function textClassificationCandidate(model: ListedModel): TextClassificationCandidate | undefined {
+  if (isMlxPort(model)) return undefined
   const files = listedFiles(model)
   if (isLayaRepo(files)) return isLayaEngineRepo(model) ? { model, runtime: 'laya' } : undefined
   const configDir = classifierCheckpointDir(model, files)
   return configDir === undefined ? undefined : { model, runtime: 'vllm', configDir }
+}
+
+/** MLX weights load on neither the Laya engine (PyTorch) nor vLLM, whatever the repo's files look like. */
+function isMlxPort(model: ListedModel): boolean {
+  return model.library_name === 'mlx'
 }
 
 function listedFiles(model: ListedModel): RawTreeEntry[] {
@@ -129,12 +135,19 @@ async function runnable(
   candidates: TextClassificationCandidate[],
   hub: TextClassificationHub,
 ): Promise<TextClassificationRepo[]> {
-  const verifiable = new Set(candidates.filter(isNliCandidate).slice(0, MAX_NLI_VERIFICATIONS))
+  const verifiable = new Set(likelyNliFirst(candidates.filter(isNliCandidate)).slice(0, MAX_NLI_VERIFICATIONS))
   const verdicts = await Promise.all(
     candidates.map((candidate) =>
       candidate.runtime === 'laya' || (verifiable.has(candidate) && isJevCheckpoint(candidate, hub))),
   )
   return candidates.filter((_, i) => verdicts[i]).map(({ model, runtime }) => ({ model, runtime }))
+}
+
+/** The read budget is small, and a listing sorted by downloads is mostly rerankers, guards and sentiment models:
+ *  the repos Hugging Face tags nli are read first, each group in its own order. */
+function likelyNliFirst(candidates: NliCandidate[]): NliCandidate[] {
+  const taggedNli = (candidate: NliCandidate) => candidate.model.tags?.includes('nli') === true
+  return [...candidates.filter(taggedNli), ...candidates.filter((candidate) => !taggedNli(candidate))]
 }
 
 function isNliCandidate(candidate: TextClassificationCandidate): candidate is NliCandidate {

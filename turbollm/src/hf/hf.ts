@@ -6,7 +6,7 @@
 import { quantFromName } from '../gguf/gguf'
 import { detectJev } from '../models/jev'
 import { findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES, type HfCheckpoint } from './checkpoints'
-import { isLayaEngineRepo, isLayaRepo, layaRepoFiles } from './laya-repo'
+import { isLayaEngineRepo, isLayaRepo, isOtherRuntimePort, layaRepoFiles } from './laya-repo'
 import {
   findTextClassificationRepos,
   type ListedModel,
@@ -219,7 +219,7 @@ export class HfClient {
     let files: HfRepoFile[]
     let safetensors: boolean | undefined
     let checkpoints: HfCheckpoint[] | undefined
-    const laya = isSafetensors && isLayaRepo(tree) && isLayaEngineRepo(info)
+    const laya = isSafetensors && isLayaRepo(tree) && !isOtherRuntimePort(info)
     if (laya) {
       safetensors = true
       files = layaRepoFiles(tree, (path) => this.fileUrl(repo, path))

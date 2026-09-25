@@ -143,7 +143,15 @@ function withHf(hf: FakeHf, run: (urls: string[]) => Promise<void>): Promise<voi
 
 function listingAnswer(hf: FakeHf, url: string): Response {
   const rows = url.includes('filter=laya') ? hf.laya : url.includes('filter=nli') ? hf.nli : hf.textClassification
-  return typeof rows === 'number' ? new Response('nope', { status: rows }) : json(rows ?? [])
+  return typeof rows === 'number' ? new Response('nope', { status: rows }) : json((rows ?? []).map((row) => onlyRequested(row, url)))
+}
+
+/** Given any expand[], HF answers with the id and only the fields asked for (checked live 2026-09-25). A field the
+ *  search reads but forgot to ask for is therefore missing in production, and here. */
+function onlyRequested(row: ListedModel, url: string): ListedModel {
+  const requested = new Set([...url.matchAll(/expand\[\]=([A-Za-z_]+)/g)].map((match) => match[1]))
+  const kept = Object.entries(row).filter(([field]) => field === 'id' || requested.has(field))
+  return Object.fromEntries(kept) as ListedModel
 }
 
 function configAnswer(hf: FakeHf, url: string): Response {

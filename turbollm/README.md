@@ -369,10 +369,12 @@ there. Entirely local; nothing leaves your machine.
 </details>
 
 <details>
-<summary><strong>🧠 Jev — ask structured questions about any text, locally</strong></summary>
+<summary><strong>🧠 Text classification (Jev and Laya) — ask structured questions about any text, locally</strong></summary>
 
 <br/>
 
+- **Models → Discover → Text classification** finds every model TurboLLM can run for this, whichever chat
+  engine is active. Two kinds run today: Jev (NLI cross-encoders on vLLM) and Laya (its own engine).
 - **Load an NLI model (such as OpenJev) and TurboLLM detects it as a Jev model.** Workspace turns
   into a JSON-first playground: two editors — the content, and the questions you're asking about
   it — *are* the request. Ctrl/Cmd+Enter to run; see the answers per question, the raw response,
@@ -387,7 +389,8 @@ there. Entirely local; nothing leaves your machine.
 - **Laya decision models, too** ([convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya)):
   - What it is: a calibrated System One model that answers the same `/v1/systemone` questions in 100+ languages.
   - Where it runs: on its own Laya engine (Engines page; Windows, macOS, Linux; CPU or GPU), beside your chat model.
-  - How to get it: search "laya" in Discover. The playground opens from the Workspace sidebar while it is loaded.
+  - How to get it: switch on the Text classification chip in Discover, or search "laya". The same playground opens from the Workspace sidebar while it is loaded.
+  - Overview of both: <https://turbollm.dev/docs/text-classification>.
 
 </details>
 

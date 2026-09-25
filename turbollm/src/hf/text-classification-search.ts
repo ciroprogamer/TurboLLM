@@ -50,7 +50,7 @@ const CATEGORY_LISTINGS = ['pipeline_tag=text-classification', 'filter=laya', 'f
 
 /** Given any expand[], HF returns only the fields asked for (checked live 2026-09-25), so every field read here or by
  *  the search row is named. The expanded config has a root config's architectures, never its id2label. */
-const LISTED_FIELDS = ['siblings', 'config', 'downloads', 'likes', 'lastModified', 'createdAt', 'gated', 'tags']
+const LISTED_FIELDS = ['siblings', 'config', 'library_name', 'downloads', 'likes', 'lastModified', 'createdAt', 'gated', 'tags']
   .map((field) => `expand[]=${field}`)
   .join('&')
 

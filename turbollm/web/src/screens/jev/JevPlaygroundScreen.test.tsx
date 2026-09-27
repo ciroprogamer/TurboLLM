@@ -265,6 +265,13 @@ describe('JevPlaygroundScreen', () => {
     ).toBeInTheDocument()
   })
 
+  // WCAG 2.1.2: capturing Tab is only ever not a keyboard trap if the escape route is disclosed
+  // somewhere on screen, not left for a keyboard-only user to discover by trial and error.
+  it('discloses Shift+Tab as the way out of a JSON field that captures Tab for indenting', () => {
+    renderScreen()
+    expect(screen.getAllByText(/Shift\+Tab moves to the next field/)).not.toHaveLength(0)
+  })
+
   // jsdom cannot measure overflow; a real 375 px page is checked in the browser pass.
   it('lays the two sections out one column on a phone and two from md, letting both shrink', () => {
     renderScreen()

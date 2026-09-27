@@ -65,10 +65,18 @@ export function QuestionsFormEditor({ value, onChange, problem, onValidityChange
     setRows(rowsFromQuestionsText(value))
   }, [value])
 
+  /** A repeated id, or a repeated option name within one question, cannot both survive in the text at
+   *  once — the object those rows serialize into can only hold one member under that key. Sending it
+   *  anyway would silently overwrite the earlier question or option in the draft the moment the clash
+   *  appears, long before anyone acts on the on-screen warning or switches to the JSON view to fix it.
+   *  So the rows still update (the cards and the warning stay live), but the text sent up, and with it
+   *  the draft, stays at its last clash-free state — nothing is lost, only held — until every clash is
+   *  gone, at which point the fully caught-up text is sent in one go. */
   function changeRows(next: QuestionFormRow[]) {
+    setRows(next)
+    if (hasAnyClash(next)) return
     const text = questionsTextFromRows(next)
     lastSent.current = text
-    setRows(next)
     onChange(text)
   }
 
@@ -101,6 +109,9 @@ function useReportedValidity(valid: boolean, onValidityChange?: (valid: boolean)
 }
 
 const hasUniqueOptionNames = (row: QuestionFormRow): boolean => duplicateOptionNames(row).length === 0
+
+const hasAnyClash = (rows: QuestionFormRow[]): boolean =>
+  duplicateQuestionIds(rows).length > 0 || !rows.every(hasUniqueOptionNames)
 
 interface QuestionCardProps {
   row: QuestionFormRow

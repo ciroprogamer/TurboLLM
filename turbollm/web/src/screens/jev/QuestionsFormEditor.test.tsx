@@ -312,6 +312,39 @@ describe('QuestionsFormEditor with a repeated id or option name', () => {
     expect(lastValidity()).toBe(true)
   })
 
+  // Reported live: renaming a second question's id onto an existing one, then switching to the JSON
+  // view to fix it there, found only one question left — the collapsed text had already overwritten
+  // the original in the draft the moment the duplicate id was typed, well before anyone chose "JSON".
+  it('never sends text that has lost a question, even while two questions share an id', () => {
+    const { onText } = renderHosted({ urgent: URGENT, team: TEAM })
+    onText.mockClear()
+    fireEvent.change(fieldOf(2, 'id'), { target: { value: 'urgent' } })
+    for (const call of onText.mock.calls) expect(Object.keys(JSON.parse(call[0]))).toHaveLength(2)
+    expect(questionIds()).toHaveLength(2) // both cards are still on screen, whatever the held-back text says
+  })
+
+  it('sends every edit made while the id clash was still unresolved, the moment it is fixed', () => {
+    const { lastQuestions } = renderHosted({ urgent: URGENT, team: TEAM })
+    fireEvent.change(fieldOf(2, 'id'), { target: { value: 'urgent' } })
+    fireEvent.change(fieldOf(2, 'instructions'), { target: { value: 'Which team, urgently?' } })
+    fireEvent.change(fieldOf(2, 'id'), { target: { value: 'routing' } })
+    const questions = lastQuestions() as Record<string, { instructions: string }>
+    expect(Object.keys(questions)).toEqual(['urgent', 'routing'])
+    expect(questions.routing.instructions).toBe('Which team, urgently?')
+  })
+
+  it('never sends text with fewer options than the card shows, even while two options share a name', () => {
+    const { onText } = renderHosted({ urgent: URGENT, team: TEAM })
+    onText.mockClear()
+    fireEvent.change(fieldOf(2, 'Name of option 2 of team'), { target: { value: 'billing' } })
+    for (const call of onText.mock.calls) {
+      const sent = JSON.parse(call[0]) as { team: { criteria: Record<string, string> } }
+      expect(Object.keys(sent.team.criteria)).toHaveLength(2)
+    }
+    expect(fieldOf(2, 'Name of option 1 of team')).toHaveValue('billing')
+    expect(fieldOf(2, 'Name of option 2 of team')).toHaveValue('billing') // both cards stay on screen
+  })
+
   it.each(SYSTEMONE_EXAMPLES.map((example) => [example.label, example.questionsText]))(
     'shows no warning, and reports itself valid, for the example "%s"',
     (_label, questionsText) => {

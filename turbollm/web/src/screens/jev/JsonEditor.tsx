@@ -17,6 +17,10 @@ interface JsonEditorProps {
   caption?: string
 }
 
+/** Tab is captured here to indent (see `onKeyDown` below), so the field's caption must say how to
+ *  still leave it by keyboard — WCAG 2.1.2 requires the escape route be disclosed, not just exist. */
+export const TAB_INDENT_HINT = 'Shift+Tab moves to the next field.'
+
 /** The look the request's fields share, so the questions form and the Example picker beside these
  *  editors read as one page. */
 export const labelCls = 'text-[12px] font-medium text-muted'
@@ -63,7 +67,7 @@ export function EditorFrame({ header, children }: { header: ReactNode; children:
 export function JsonEditorBody({ id, label, value, onChange, mode, problem, caption }: JsonEditorProps) {
   const inspection = useMemo(() => inspectJson(value), [value])
   const status = describeStatus(mode, value, inspection)
-  const canFormat = inspection.valid && inspection.formattable
+  const canFormat = inspection.valid && inspection.formattable && sendsThePrettyPrint(mode, inspection.value)
   const statusId = `${id}-status`
   // The status line already says why unparseable text is wrong: one message per fault, not two.
   const shownProblem = status.invalid ? undefined : problem
@@ -85,9 +89,11 @@ export function JsonEditorBody({ id, label, value, onChange, mode, problem, capt
   }
 
   /** The same reformat Format runs, so leaving the editor tidies valid JSON without a click. Skipped
-   *  when it would be a no-op (already formatted) or unsafe (unformattable), exactly Format's own rule. */
+   *  when it would be a no-op (already formatted) or unsafe (unformattable), exactly Format's own rule
+   *  — and, only for this automatic trigger, when the text has a duplicate key: reformatting collapses
+   *  it to whichever value JSON.parse kept, and an unwatched click away must never be what does that. */
   function formatOnBlur() {
-    if (!canFormat || !inspection.valid) return
+    if (!canFormat || !inspection.valid || hasDuplicateKeys(value)) return
     const formatted = JSON.stringify(inspection.value, null, 2)
     if (formatted !== value) onChange(formatted)
   }
@@ -167,6 +173,70 @@ function describeStatus(mode: JsonEditorProps['mode'], text: string, inspection:
 
 function isObjectArrayOrString(value: unknown): boolean {
   return typeof value === 'string' || (typeof value === 'object' && value !== null)
+}
+
+/** In json-or-text mode, a bare number/boolean/null is sent as the literal text typed (stateFromText
+ *  keeps it as a string unless it parses to an object, array or string) — pretty-printing it would swap
+ *  the parsed number back in, silently sending a different value than what is on screen. In plain json
+ *  mode the parsed value is always what is sent, so reformatting is always safe. */
+function sendsThePrettyPrint(mode: JsonEditorProps['mode'], value: unknown): boolean {
+  return mode === 'json' || isObjectArrayOrString(value)
+}
+
+type Container = 'object' | 'array'
+
+/** Whether any one object literal in `text` names the same key twice. `JSON.parse`'s own reviver cannot
+ *  answer this — by the time it runs, the object is already built with the duplicate collapsed away — so
+ *  this walks the raw text itself: a small bracket- and string-aware scan, not a full JSON parser, since
+ *  `text` is only ever passed here once `JSON.parse` has already accepted it. */
+function hasDuplicateKeys(text: string): boolean {
+  const containers: Container[] = []
+  const seenKeysByDepth: Set<string>[] = []
+  let atMemberStart = false
+  let i = 0
+  while (i < text.length) {
+    const char = text[i]
+    if (/\s/.test(char)) { i++; continue }
+    if (char === '{') { containers.push('object'); seenKeysByDepth.push(new Set()); atMemberStart = true; i++; continue }
+    if (char === '[') { containers.push('array'); seenKeysByDepth.push(new Set()); atMemberStart = false; i++; continue }
+    if (char === '}' || char === ']') { containers.pop(); seenKeysByDepth.pop(); atMemberStart = false; i++; continue }
+    if (char === ',') { atMemberStart = containers.at(-1) === 'object'; i++; continue }
+    if (char === '"') {
+      const isKey = atMemberStart && containers.at(-1) === 'object'
+      const { text: literal, end } = readJsonString(text, i)
+      i = end
+      if (isKey) {
+        const seen = seenKeysByDepth.at(-1)
+        if (seen?.has(literal)) return true
+        seen?.add(literal)
+        i = skipToAfterColon(text, i)
+      }
+      atMemberStart = false
+      continue
+    }
+    atMemberStart = false
+    i++
+  }
+  return false
+}
+
+/** The raw (still-escaped) text of the string starting at `text[start]` (a `"`), and the index just past
+ *  its closing quote. The escaped form is enough to tell two keys apart; it never needs decoding here. */
+function readJsonString(text: string, start: number): { text: string; end: number } {
+  let i = start + 1
+  let literal = ''
+  while (i < text.length && text[i] !== '"') {
+    if (text[i] === '\\') { literal += text[i] + (text[i + 1] ?? ''); i += 2; continue }
+    literal += text[i]
+    i++
+  }
+  return { text: literal, end: i + 1 }
+}
+
+function skipToAfterColon(text: string, from: number): number {
+  let i = from
+  while (i < text.length && text[i] !== ':') i++
+  return i + 1
 }
 
 const ENGINE_LINE_AND_COLUMN = / \(line \d+ column \d+\)$/

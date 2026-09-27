@@ -3,7 +3,7 @@
 // them, so the view toggle a user just pressed keeps the focus.
 import { useId, useState } from 'react'
 import { canEditAsForm } from './questions-form'
-import { EditorFrame, JsonEditorBody, labelCls } from './JsonEditor'
+import { EditorFrame, JsonEditorBody, labelCls, TAB_INDENT_HINT } from './JsonEditor'
 import { QuestionsFormEditor } from './QuestionsFormEditor'
 import { ViewToggle } from './ViewToggle'
 
@@ -50,7 +50,15 @@ export function QuestionsField({ value, onChange, problem, onFormValidityChange 
   return (
     <EditorFrame header={header}>
       {shownView === 'json' ? (
-        <JsonEditorBody id={JSON_EDITOR_ID} label={QUESTIONS_LABEL} mode="json" value={value} onChange={onChange} problem={problem} />
+        <JsonEditorBody
+          id={JSON_EDITOR_ID}
+          label={QUESTIONS_LABEL}
+          mode="json"
+          value={value}
+          onChange={onChange}
+          problem={problem}
+          caption={TAB_INDENT_HINT}
+        />
       ) : (
         <div role="group" aria-labelledby={labelId} className="col-span-2 row-start-2">
           <QuestionsFormEditor value={value} onChange={onChange} problem={problem} onValidityChange={onFormValidityChange} />

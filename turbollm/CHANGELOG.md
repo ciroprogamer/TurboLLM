@@ -40,9 +40,10 @@ _Nothing yet._
   toggle to switch between them. Form shows one card per question — an id, a type (Yes/no, Pick one, Scale),
   instructions, and type-specific fields: an optional "what does yes look like" for Yes/no, an option list for Pick
   one, and an ordered, reorderable level list for Scale. The JSON text stays the single source of truth; editing a
-  question through the form never rewrites another, untouched question's structured JSON. Two questions sharing an
-  id, or two options sharing a name, are flagged right on the card and block Run, instead of silently dropping a
-  question the next time the draft is saved.
+  question through the form re-serializes the whole `questions` object, so an untouched question never disappears but
+  can still pick up a dropped `criteria.false`, an empty string for a `null` description, or a renumbered id. Two
+  questions sharing an id, or two options sharing a name, are flagged right on the card and block Run,
+  instead of silently dropping a question the next time the draft is saved.
 
 ### Changed
 
@@ -82,6 +83,9 @@ _Nothing yet._
   a code editor; Shift+Tab still moves focus backward.
 - **An answer card didn't show which question it answered.** Two yes/no questions read identically ("0.945
   entailment probability") with nothing on screen to tell them apart. Every card now shows its question's id.
+- **A Laya-shaped repo that actually names another runtime library was still offered as a Laya download.** An MLX,
+  ONNX, CoreML or ggml port of a Laya checkpoint can match the same root file layout; it's now recognized from its
+  Hugging Face `library_name` and excluded, the same way other non-Laya libraries already were.
 
 ### Discord
 

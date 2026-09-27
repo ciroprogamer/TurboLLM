@@ -198,6 +198,57 @@ describe('JsonEditor', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  // A json-or-text field sends a bare number/boolean/null as the literal STRING typed (stateFromText
+  // keeps text unless it parses to an object, array or string) — reformatting it would silently swap
+  // the sent value from that string to the parsed number. Reported live: '1.50' became '1.5' on blur.
+  it('disables Format, and does not reformat on blur, for a bare number/boolean/null in json-or-text mode', () => {
+    const { onChange } = renderEditor({ mode: 'json-or-text', value: '1.50' })
+    expect(formatButton()).toBeDisabled()
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('still formats an object, array or string in json-or-text mode, where the parsed value is what is sent', () => {
+    const { onChange } = renderEditor({ mode: 'json-or-text', value: '{"a":1}' })
+    expect(formatButton()).toBeEnabled()
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": 1\n}')
+  })
+
+  // Reported live: pasting a second question over an unrenamed id, then clicking elsewhere, silently
+  // dropped the first one from the visible text with no chance to notice before it was gone.
+  it('does not reformat a duplicate key away on blur, only on an explicit Format click', () => {
+    const duplicate = '{\n  "a": 1,\n  "a": 2\n}'
+    const { onChange, rerenderWith } = renderEditor({ mode: 'json', value: duplicate })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+    rerenderWith({ value: duplicate })
+    expect(formatButton()).toBeEnabled()
+    fireEvent.click(formatButton())
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": 2\n}')
+  })
+
+  it('does not mistake a string value equal to a key name for a second key', () => {
+    const value = '{"a":"a","b":2}'
+    const { onChange } = renderEditor({ mode: 'json', value })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": "a",\n  "b": 2\n}')
+  })
+
+  it('still catches a real duplicate key even when an earlier value is the string form of that key', () => {
+    const value = '{"a":"a","a":1}'
+    const { onChange } = renderEditor({ mode: 'json', value })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not mistake the same key name reused in two different objects for a duplicate', () => {
+    const minified = '{"q":{"a":1},"q2":{"a":1}}'
+    const { onChange } = renderEditor({ mode: 'json', value: minified })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "q": {\n    "a": 1\n  },\n  "q2": {\n    "a": 1\n  }\n}')
+  })
+
   // The questions field keeps one label row across its JSON and form views, so it heads the editor's
   // body itself rather than letting the editor draw a second one.
   it('lets a page head the editor with a label row of its own, before the textarea and beside Format', () => {

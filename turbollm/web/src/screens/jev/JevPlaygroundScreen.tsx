@@ -21,7 +21,7 @@ import type { LoadedJev, ModelEntry, Status } from '../../lib/types'
 import { useIsDesktop } from '../../lib/useIsDesktop'
 import { AnswerList } from './AnswerList'
 import { JevHeader } from './JevHeader'
-import { JsonEditor, selectCls } from './JsonEditor'
+import { JsonEditor, selectCls, TAB_INDENT_HINT } from './JsonEditor'
 import { QuestionsField } from './QuestionsField'
 import { ResponsePanel, type SystemOneRun } from './ResponsePanel'
 import { SwitchModelMenu, ejectModel, switchToModel } from './SwitchModelMenu'
@@ -172,7 +172,7 @@ export function JevPlaygroundScreen() {
               id="jev-state"
               label="state"
               mode="json-or-text"
-              caption="JSON object or array, or plain text."
+              caption={`JSON object or array, or plain text. ${TAB_INDENT_HINT}`}
               value={draft.stateText}
               onChange={(next) => setDraft((d) => ({ ...d, stateText: next }))}
               problem={problems.find(isStateProblem)?.message}

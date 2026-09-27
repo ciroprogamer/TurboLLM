@@ -22,6 +22,7 @@ import { join, dirname } from 'node:path'
 import { buildShellCommand } from './util/shell-command'
 import { requiresShell, resolveExecutable } from './util/resolve-executable'
 import { isQualifiedId } from './link/model-id'
+import { isTextClassifier } from './models/text-classifier'
 
 /** Everything a harness might need to wire itself to this daemon, resolved once per launch and
  *  handed to every per-harness hook on {@link CliSpec}. Exists so adding a harness is a data entry
@@ -306,9 +307,12 @@ export const CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '80'
 export interface ModelEntry {
   key: string
   name: string
-  /** Present when this is a Jev model: it labels text and cannot chat (ADR-434 (f)), so no
-   *  coding agent may be pointed at it. Shape irrelevant here — only presence matters. */
+  /** Present when this is a Jev model. It and `laya` mark text classification: a model that labels or
+   *  scores text and cannot chat (ADR-434 (f), ADR-444), so no coding agent may be pointed at it.
+   *  Shape irrelevant here — only presence matters. */
   jev?: unknown
+  /** Present when this is a Laya model — text classification too, exactly as `jev` above. */
+  laya?: unknown
   /** The model's own maximum context from its GGUF metadata — a ceiling, not what it will load with. */
   nativeCtx?: number
   /** The context window this model would ACTUALLY be loaded with, from its saved profile/preset for
@@ -421,16 +425,16 @@ async function fetchStatus(base: string, _fetch: typeof fetch = fetch): Promise<
   }
 }
 
-/** The models a coding agent can actually talk to. A Jev model labels text and cannot hold a
- *  conversation (ADR-434 (f)), so it is never a launch target. */
+/** The models a coding agent can actually talk to. A text classification model (Jev or Laya) labels
+ *  or scores text and cannot hold a conversation (ADR-434 (f), ADR-444), so it is never a launch target. */
 function chatModels(models: ModelEntry[]): ModelEntry[] {
-  return models.filter((m) => !m.jev)
+  return models.filter((m) => !isTextClassifier(m))
 }
 
-/** A coding agent that is handed a Jev model fails on its first prompt with an opaque error, so
- *  every path that would pick one says why here instead and exits 1. */
-function refuseJevModel(name: string): number {
-  process.stderr.write(`'${name}' is a Jev model (it labels text) — coding agents need a chat model.\n`)
+/** A coding agent that is handed a text classification model fails on its first prompt with an
+ *  opaque error, so every path that would pick one says why here instead and exits 1. */
+function refuseTextClassifier(name: string): number {
+  process.stderr.write(`'${name}' is a text classification model — coding agents need a chat model.\n`)
   return 1
 }
 
@@ -1444,10 +1448,10 @@ export async function launchCli(
     const models = await fetchModels(base, _fetch)
     const resolvedKey = resolveModelKey(models, modelKey)
 
-    // Refused BEFORE any load: a Jev model would start an engine that cannot answer a single
-    // prompt, and the agent would fail on its first turn with an opaque error instead.
+    // Refused BEFORE any load: a text classification model would start an engine that cannot answer
+    // a single prompt, and the agent would fail on its first turn with an opaque error instead.
     const resolvedEntry = models.find((m) => m.key === resolvedKey)
-    if (resolvedEntry?.jev) return refuseJevModel(resolvedEntry.name)
+    if (resolvedEntry && isTextClassifier(resolvedEntry)) return refuseTextClassifier(resolvedEntry.name)
 
     // Turbo Link fallback, and deliberately a FALLBACK rather than a first check: a local
     // key can legitimately contain a slash (`unsloth/Qwen3-GGUF`), so it parses as
@@ -1542,7 +1546,7 @@ export async function launchCli(
     // has to be a chat model too: the two branches above never run for it, and it would otherwise be
     // pinned into the harness below (a gateway auto-swap can leave a Jev model loaded).
     const loadedJev = await loadedJevName(base, status, _fetch)
-    if (loadedJev) return refuseJevModel(loadedJev)
+    if (loadedJev) return refuseTextClassifier(loadedJev)
   }
 
   // At this point we expect a model to be loaded — UNLESS it is a remote one, in which

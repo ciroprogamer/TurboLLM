@@ -6,6 +6,7 @@ import { computeNextFireTime } from './schedule'
 import { resumeRoutineRun } from './execute'
 import type { ScheduleRule, RoutineFlavor, Routine, RoutineRun, CodingAgentChoice } from './schema'
 import { CODING_AGENT_CHOICES } from './schema'
+import { isTextClassifierKey } from '../models/text-classifier'
 
 type Status = 200 | 201 | 400 | 401 | 403 | 404 | 409 | 500 | 503
 
@@ -94,16 +95,17 @@ function validateCommonFields(b: RoutineBody): string | null {
  *  with no way to discover a real modelKey created a routine with `modelKey: "gpt-4"` — a real
  *  cloud model name, not anything in the library — which could never fire successfully; nothing
  *  caught that until the scheduler's very first attempt to run it, silently, with no one watching. */
-/** Why a routine cannot be pinned to a Jev model (ADR-434 (f)): it labels text, so every run
- *  would swap it in and then fail on the in-app chat guard. Shared by the REST routes and the
- *  model-callable tools, so both refuse in the same words. */
-export const JEV_ROUTINE_MODEL_MESSAGE = (key: string): string =>
-  `modelKey "${key}" is a Jev model — it labels text and cannot run a chat or code routine. Pick a chat model (list_models marks Jev models with kind: jev).`
+/** Why a routine cannot be pinned to a text classification model, Jev or Laya (ADR-434 (f), ADR-444): it labels
+ *  or scores text, so every run would swap it in and then fail on the in-app chat guard. Shared by the REST routes
+ *  and the model-callable tools, so both refuse in the same words. */
+export const TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE = (key: string): string =>
+  `modelKey "${key}" is a text classification model (Jev or Laya) — it labels or scores text and cannot run a chat ` +
+  'or code routine. Pick a chat model (list_models marks these models with kind: jev or kind: laya).'
 
 export function validateCreate(
   b: RoutineBody,
   modelExists?: (key: string) => boolean,
-  isJevModel?: (key: string) => boolean,
+  isTextClassifier?: (key: string) => boolean,
 ): string | null {
   if (b.flavor !== 'chat' && b.flavor !== 'code') return 'flavor must be "chat" or "code".'
   if (!b.prompt?.trim()) return 'prompt is required.'
@@ -113,7 +115,7 @@ export function validateCreate(
   if (modelExists && !modelExists(b.modelKey.trim())) {
     return `modelKey "${b.modelKey.trim()}" is not a model in TurboLLM's library — call list_models (or check the Models screen) for a real one.`
   }
-  if (isJevModel?.(b.modelKey.trim())) return JEV_ROUTINE_MODEL_MESSAGE(b.modelKey.trim())
+  if (isTextClassifier?.(b.modelKey.trim())) return TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(b.modelKey.trim())
   if (b.flavor === 'chat' && !b.agentId?.trim()) return 'agentId is required for a chat-flavor routine.'
   if (b.flavor === 'code' && !b.workspacePath?.trim()) return 'workspacePath is required for a code-flavor routine.'
   if (b.flavor === 'code' && (b.codingAgent === undefined || !CODING_AGENT_CHOICES.includes(b.codingAgent))) {
@@ -130,19 +132,25 @@ export function validateCreate(
  *  executor applies the same patch this route does, so it must clear the same bar — notably
  *  `validateCommonFields`'s `scheduleRule` check, without which a tool-supplied malformed rule
  *  would reach `computeNextFireTime` and throw out of the scheduler tick. */
-export function validateUpdate(b: RoutineBody, current: Routine, isJevModel?: (key: string) => boolean): string | null {
+export function validateUpdate(
+  b: RoutineBody,
+  current: Routine,
+  isTextClassifier?: (key: string) => boolean,
+): string | null {
   if (b.prompt !== undefined && !b.prompt.trim()) return 'prompt cannot be empty.'
-  if (b.modelKey !== undefined && isJevModel?.(b.modelKey.trim())) return JEV_ROUTINE_MODEL_MESSAGE(b.modelKey.trim())
+  if (b.modelKey !== undefined && isTextClassifier?.(b.modelKey.trim())) {
+    return TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(b.modelKey.trim())
+  }
   if (current.flavor === 'code' && b.workspacePath !== undefined && !b.workspacePath.trim()) {
     return 'workspacePath cannot be empty for a code-flavor routine.'
   }
   return validateCommonFields(b)
 }
 
-/** Does this key name a Jev model? Read from the scanner per request, exactly like the
- *  model-exists predicate beside it at the call sites. */
-function isJevModelIn(d: Deps): (key: string) => boolean {
-  return (key: string) => !!d.scanner.list().models.find((m) => m.key === key)?.jev
+/** Does this key name a text classification model? Read from the scanner per request, exactly like
+ *  the model-exists predicate beside it at the call sites. */
+function isTextClassifierIn(d: Deps): (key: string) => boolean {
+  return (key: string) => isTextClassifierKey(d.scanner.list().models, key)
 }
 
 /** codeAuth's decision (auth.ts), applied inline instead of as middleware. `/api/v1/code/*`
@@ -212,7 +220,7 @@ export function registerRoutineRoutes(app: Hono, d: Deps): void {
     const b = await body<RoutineBody>(c)
     // Auth before validation, so an ungated caller learns nothing about the request shape.
     if (b.flavor === 'code' && codeGateBlocks(c, d)) return err(c, 401, 'unauthorized', CODE_GATE_MESSAGE)
-    const problem = validateCreate(b, (key) => d.scanner.list().models.some((m) => m.key === key), isJevModelIn(d))
+    const problem = validateCreate(b, (key) => d.scanner.list().models.some((m) => m.key === key), isTextClassifierIn(d))
     if (problem) return err(c, 400, 'invalid_routine', problem)
     const routine = d.db.createRoutine({
       flavor: b.flavor!, prompt: b.prompt!.trim(), scheduleDisplay: b.scheduleDisplay!.trim(),
@@ -244,7 +252,7 @@ export function registerRoutineRoutes(app: Hono, d: Deps): void {
     if ((routine.flavor === 'code' || b.flavor === 'code') && codeGateBlocks(c, d)) {
       return err(c, 401, 'unauthorized', CODE_GATE_MESSAGE)
     }
-    const problem = validateUpdate(b, routine, isJevModelIn(d))
+    const problem = validateUpdate(b, routine, isTextClassifierIn(d))
     if (problem) return err(c, 400, 'invalid_routine', problem)
     const patch: Parameters<typeof d.db.updateRoutine>[1] = {}
     if (b.prompt !== undefined) patch.prompt = b.prompt.trim()

@@ -12,6 +12,8 @@ import { presentedKey } from '../auth'
 import { noteLocalActivity } from '../link/host-idle'
 import { linkHeaders, proxyStream } from '../link/link-proxy'
 import { formatRemoteId } from '../link/model-id'
+import type { ModelEntry } from '../models/scanner'
+import { isTextClassifier, textClassifierKind } from '../models/text-classifier'
 import { extractParams, summarizeRequest, drainOpenAiSseForLog, requestLogConfig, type RequestLogFinal } from '../observability/request-log'
 import { sessionAuth } from '../code/session-auth'
 import { parseReasoningEffort } from '../chat/reasoning-effort'
@@ -99,16 +101,35 @@ function asClientStatus(status: number): ContentfulStatusCode {
   return (status >= 400 && status <= 599 ? status : 500) as ContentfulStatusCode
 }
 
-/** Why a chat / embeddings / messages request naming a Jev or Laya model is refused, and where to go instead. */
+interface WrongEndpointRefusal {
+  code: 'jev_model_wrong_endpoint' | 'laya_model_wrong_endpoint'
+  message: string
+}
+
+/** Why a chat / embeddings / messages request naming a text classification model is refused, and where to go
+ *  instead. One rule for Jev and Laya (ADR-444); each runtime keeps its own error code and endpoint pointer. */
+function wrongEndpointRefusal(entry: ModelEntry, request: 'chat' | 'embeddings'): WrongEndpointRefusal {
+  return textClassifierKind(entry) === 'jev'
+    ? { code: 'jev_model_wrong_endpoint', message: jevWrongEndpointMessage(entry.name, request) }
+    : { code: 'laya_model_wrong_endpoint', message: layaWrongEndpointMessage(entry.name, request) }
+}
+
 function jevWrongEndpointMessage(modelName: string, request: 'chat' | 'embeddings'): string {
   const cannot = request === 'chat' ? 'chat' : 'produce embeddings'
-  return `'${modelName}' is a Jev model: it labels premise/hypothesis pairs and cannot ${cannot}. ` +
+  return `'${modelName}' is a text classification model (Jev): it labels premise/hypothesis pairs and cannot ${cannot}. ` +
     'Call POST /v1/systemone (or /v1/classify, /v1/rerank) instead.'
 }
 
 function layaWrongEndpointMessage(modelName: string, request: 'chat' | 'embeddings'): string {
   const cannot = request === 'chat' ? 'chat' : 'produce embeddings'
-  return `'${modelName}' is a Laya model: it answers System One questions and cannot ${cannot}. Call POST /v1/systemone instead.`
+  return `'${modelName}' is a text classification model (Laya): it answers System One questions and cannot ${cannot}. ` +
+    'Call POST /v1/systemone instead.'
+}
+
+/** How GET /v1/models marks a text classification model: its own kind, and the task it serves instead of chat. */
+function textClassifierListing(m: ModelEntry): Record<string, string> {
+  const kind = textClassifierKind(m)
+  return kind ? { kind, task: 'text-classification' } : {}
 }
 
 /** Classifies a `d.gate.acquire()` failure into one {status, type, message} shape shared by both
@@ -238,10 +259,10 @@ export function registerGateway(app: Hono, d: Deps, opts: GatewayOptions = {}): 
     const maxLimit = d.store.snapshot().modelDefaults.maxTokens ?? 0
     req.max_tokens = clampMaxTokens(req.max_tokens, maxLimit) ?? req.max_tokens
 
-    // A Jev model never chats (ADR-434 (f)); refuse before route() could auto-swap it in.
-    const jevModel = d.modelRouter.targetEntry(req.model ?? '')
-    if (jevModel?.jev || jevModel?.laya) {
-      const message = jevModel.jev ? jevWrongEndpointMessage(jevModel.name, 'chat') : layaWrongEndpointMessage(jevModel.name, 'chat')
+    // A text classification model never chats (ADR-434 (f), ADR-444); refuse before route() could auto-swap it in.
+    const requestedEntry = d.modelRouter.targetEntry(req.model ?? '')
+    if (requestedEntry && isTextClassifier(requestedEntry)) {
+      const { message } = wrongEndpointRefusal(requestedEntry, 'chat')
       return c.json({ type: 'error', error: { type: 'invalid_request_error', message } }, 400)
     }
 
@@ -785,12 +806,13 @@ export async function gatewayV1Handler(c: Context, d: Deps, opts: GatewayV1Optio
   // strips back to the real key before routing) is only added when gateway.autoSwap is
   // on: picking a model from Claude Code's /model always requires a swap, so advertising
   // it while auto-swap is off would let the user pick a model that silently never loads.
-  // A Jev or Laya model is marked `kind: "jev"` / `kind: "laya"` and gets no alias: it never chats, so Claude Code can't use it.
+  // A text classification model (Jev or Laya) is marked `kind: "jev"` / `kind: "laya"` with
+  // `task: "text-classification"` and gets no alias: it never chats, so Claude Code can't use it.
   if (c.req.method === 'GET' && pathname === '/v1/models') {
     const autoSwap = d.store.snapshot().gateway.autoSwap
     const data: Array<Record<string, unknown>> = d.scanner.list().models.flatMap((m) => [
-      { id: m.key, object: 'model', owned_by: 'turbollm', ...(m.jev ? { kind: 'jev' } : m.laya ? { kind: 'laya' } : {}) },
-      ...(autoSwap && !m.jev && !m.laya ? [{ id: `claude-${m.key}`, object: 'model', display_name: `${m.name} — TurboLLM` }] : []),
+      { id: m.key, object: 'model', owned_by: 'turbollm', ...textClassifierListing(m) },
+      ...(autoSwap && !isTextClassifier(m) ? [{ id: `claude-${m.key}`, object: 'model', display_name: `${m.name} — TurboLLM` }] : []),
     ])
     // Turbo Link (ADR-376 §1 decision 7): every model on every ONLINE linked host, under
     // its qualified `<machine>/<model>` id — the exact id ModelRouter.resolveRemote routes
@@ -873,17 +895,13 @@ export async function gatewayV1Handler(c: Context, d: Deps, opts: GatewayV1Optio
     : null
 
   const requestedModel = (isChat || isEmbeddings) ? ((parsedBody?.model as string | undefined) ?? '') : ''
-  // A Jev model can neither chat nor embed (ADR-434 (f)). Asked of targetEntry, which loads nothing,
-  // so the refusal never swaps the Jev model in first.
+  // A text classification model can neither chat nor embed (ADR-434 (f), ADR-444). Asked of targetEntry,
+  // which loads nothing, so the refusal never swaps the model in first.
   if (isChat || isEmbeddings) {
-    const jevModel = d.modelRouter.targetEntry(requestedModel)
-    if (jevModel?.jev) {
-      const message = jevWrongEndpointMessage(jevModel.name, isChat ? 'chat' : 'embeddings')
-      return c.json({ error: { type: 'invalid_request_error', code: 'jev_model_wrong_endpoint', message } }, 400)
-    }
-    if (jevModel?.laya) {
-      const message = layaWrongEndpointMessage(jevModel.name, isChat ? 'chat' : 'embeddings')
-      return c.json({ error: { type: 'invalid_request_error', code: 'laya_model_wrong_endpoint', message } }, 400)
+    const requestedEntry = d.modelRouter.targetEntry(requestedModel)
+    if (requestedEntry && isTextClassifier(requestedEntry)) {
+      const { code, message } = wrongEndpointRefusal(requestedEntry, isChat ? 'chat' : 'embeddings')
+      return c.json({ error: { type: 'invalid_request_error', code, message } }, 400)
     }
   }
   const routeResult = await d.modelRouter.route(requestedModel)

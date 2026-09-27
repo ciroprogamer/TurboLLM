@@ -61,7 +61,7 @@ export function JevLoadConfirmHost() {
         <AlertDialogHeader>
           <AlertDialogTitle>Load {target.name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Loading a Jev model stops the running model and interrupts:
+            Loading a text classification model on vLLM stops the running model and interrupts:
           </AlertDialogDescription>
         </AlertDialogHeader>
         <ul className="text-sm text-muted list-disc pl-5 space-y-1">

@@ -138,7 +138,7 @@ export function RoutineFormFields({ draft, onChange, disabled, lockFlavor }: { d
         <select id={id('model')} disabled={disabled} className={inputCls} value={draft.modelKey} onChange={(e) => onChange({ ...draft, modelKey: e.target.value })}>
           <option value="">Choose a model…</option>
           {orphanModelKey && <option value={orphanModelKey}>{orphanModelKey} (not in the current catalog)</option>}
-          {storedJevModel && <option value={storedJevModel.key}>{storedJevModel.name} (a Jev model — it can&apos;t run a routine)</option>}
+          {storedJevModel && <option value={storedJevModel.key}>{storedJevModel.name} (a text classification model — it can&apos;t run a routine)</option>}
           {/* Quant + dir, not just name: the catalog can hold several entries with the SAME
               display name (different quant, or the same quant re-downloaded to a different
               path) — without this an option like "Qwen3.6-35B-A3B" is ambiguous among 4+ real

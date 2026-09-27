@@ -43,15 +43,17 @@ test('the TurboLLM Expert persona lists /v1/systemone, /v1/classify and /v1/rera
   const expert = resolveAgents([], {}).find((a) => a.id === 'expert')
   assert.ok(expert)
   const gateway = expert!.systemPrompt.split('## Gateway')[1].split('\n## ')[0]
-  assert.match(gateway, /\*\*OpenAI-compatible\*\*: .*`POST \/v1\/embeddings`, `POST \/v1\/systemone` \(Jev and Laya models\), `POST \/v1\/classify`, `POST \/v1\/rerank` \(Jev models\)/)
+  assert.match(gateway, /\*\*OpenAI-compatible\*\*: .*`POST \/v1\/embeddings`, `POST \/v1\/systemone` \(text classification models\), `POST \/v1\/classify`, `POST \/v1\/rerank` \(Jev models only\)/)
 })
 
-test('the TurboLLM Expert persona knows Laya models run on their own engine and where to find them (ADR-443)', () => {
+// ADR-444: one name, "text classification", then the two runtimes behind it.
+test('the TurboLLM Expert persona names text classification once, then its two runtimes and where to find them', () => {
   const expert = resolveAgents([], {}).find((a) => a.id === 'expert')
   assert.ok(expert)
   const gateway = expert!.systemPrompt.split('## Gateway')[1].split('\n## ')[0]
+  assert.match(gateway, /Jev models are NLI cross-encoders served by vLLM/)
   assert.match(gateway, /Laya models run on their own Laya engine/)
-  assert.match(gateway, /searching "laya" in Discover/)
+  assert.match(gateway, /Discover's Text classification category finds both/)
 })
 
 // getDefaultAgentId/getConvAgentId's isAndroid fallback (personas.ts) isn't covered here: both

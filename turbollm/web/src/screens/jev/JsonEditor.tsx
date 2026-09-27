@@ -1,9 +1,11 @@
 // One JSON input of a System One request (ADR-439): a plain textarea with a live status line.
-// There is no editor library on purpose (nothing new is added to the web app), and Tab is left
-// alone, because capturing it would make the control a keyboard trap.
-import { useMemo } from 'react'
+// There is no editor library on purpose (nothing new is added to the web app). Tab indents instead
+// of moving focus, the usual code-editor convention; Shift+Tab is left alone as the escape hatch, so
+// the control is never a full keyboard trap.
+import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Button } from '../../components/ui/button'
-import { jsonDepth, MAX_NESTING_DEPTH } from '../../lib/systemone-types'
+import { cn } from '../../lib/utils'
+import { isTooDeep } from './systemone-draft'
 
 interface JsonEditorProps {
   id: string
@@ -15,6 +17,13 @@ interface JsonEditorProps {
   caption?: string
 }
 
+/** The look the request's fields share, so the questions form and the Example picker beside these
+ *  editors read as one page. */
+export const labelCls = 'text-[12px] font-medium text-muted'
+export const selectCls = 'max-w-[210px] rounded-md border border-border bg-bg px-2 py-1 text-[13px] text-ink'
+export const textareaCls =
+  'w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-[12px] leading-relaxed text-ink outline-none focus:border-accent placeholder:text-faint'
+
 type Inspection =
   | { valid: true; value: unknown; formattable: boolean }
   | { valid: false; error: string }
@@ -24,7 +33,34 @@ type Status = { text: string; invalid: boolean }
 const VALID_STATUS = 'Valid JSON'
 const PLAIN_TEXT_STATUS = 'Plain text – sent as a string.'
 
-export function JsonEditor({ id, label, value, onChange, mode, problem, caption }: JsonEditorProps) {
+const TAB_INDENT = '  '
+
+export function JsonEditor(props: JsonEditorProps) {
+  const header = (
+    <label htmlFor={props.id} className={labelCls}>
+      {props.label}
+    </label>
+  )
+  return (
+    <EditorFrame header={header}>
+      <JsonEditorBody {...props} />
+    </EditorFrame>
+  )
+}
+
+/** An editor's grid: the header row on top, which a page may fill with more than the label, such as a
+ *  toggle to another view of the same text; Format beside it, and the body below. */
+export function EditorFrame({ header, children }: { header: ReactNode; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5">
+      <div className="col-start-1 row-start-1 flex flex-wrap items-center gap-2">{header}</div>
+      {children}
+    </div>
+  )
+}
+
+/** Everything of the editor but its header row, for an `EditorFrame` whose header the page draws. */
+export function JsonEditorBody({ id, label, value, onChange, mode, problem, caption }: JsonEditorProps) {
   const inspection = useMemo(() => inspectJson(value), [value])
   const status = describeStatus(mode, value, inspection)
   const canFormat = inspection.valid && inspection.formattable
@@ -32,20 +68,52 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
   // The status line already says why unparseable text is wrong: one message per fault, not two.
   const shownProblem = status.invalid ? undefined : problem
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pendingCaret = useRef<number | null>(null)
+  // Restoring the caret has to wait for the value we just sent up to come back down as this
+  // textarea's own prop; doing it inline in the key handler would set it right before React
+  // overwrites the DOM value and moves the caret to the end.
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current
+    if (caret === null) return
+    pendingCaret.current = null
+    textareaRef.current?.setSelectionRange(caret, caret)
+  }, [value])
+
   function format() {
     if (inspection.valid) onChange(JSON.stringify(inspection.value, null, 2))
   }
 
+  /** The same reformat Format runs, so leaving the editor tidies valid JSON without a click. Skipped
+   *  when it would be a no-op (already formatted) or unsafe (unformattable), exactly Format's own rule. */
+  function formatOnBlur() {
+    if (!canFormat || !inspection.valid) return
+    const formatted = JSON.stringify(inspection.value, null, 2)
+    if (formatted !== value) onChange(formatted)
+  }
+
+  /** Tab inserts an indent, as in a code editor, rather than leaving the field: JSON is typed here
+   *  more than it is tabbed past. Shift+Tab is untouched, so leaving backward always still works. */
+  function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Tab' || event.shiftKey) return
+    event.preventDefault()
+    const el = event.currentTarget
+    const start = el.selectionStart ?? value.length
+    const end = el.selectionEnd ?? value.length
+    pendingCaret.current = start + TAB_INDENT.length
+    onChange(value.slice(0, start) + TAB_INDENT + value.slice(end))
+  }
+
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5">
-      <label htmlFor={id} className="col-start-1 row-start-1 text-[12px] font-medium text-muted">
-        {label}
-      </label>
+    <>
       <textarea
         id={id}
-        className="col-span-2 row-start-2 min-h-[140px] w-full resize-y rounded-md border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-accent placeholder:text-faint"
+        ref={textareaRef}
+        className={cn(textareaCls, 'col-span-2 row-start-2 min-h-[140px] font-mono')}
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={formatOnBlur}
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
@@ -72,7 +140,7 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
           {shownProblem}
         </p>
       )}
-    </div>
+    </>
   )
 }
 
@@ -81,7 +149,7 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
 function inspectJson(text: string): Inspection {
   try {
     const value: unknown = JSON.parse(text)
-    return { valid: true, value, formattable: jsonDepth(value, MAX_NESTING_DEPTH) <= MAX_NESTING_DEPTH }
+    return { valid: true, value, formattable: !isTooDeep(value) }
   } catch (error) {
     return { valid: false, error: error instanceof Error ? error.message : String(error) }
   }

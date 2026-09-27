@@ -1,7 +1,7 @@
 // ADR-434 (f): a Jev model labels premise/hypothesis pairs and can never chat, so every list
 // that says "pick a model to talk to" must leave it out. One predicate, so no picker can drift.
 import { describe, expect, it } from 'vitest'
-import { isChatModel, isSystemOneModel } from './model-kind'
+import { isChatModel, isSystemOneModel, textClassificationRuntime, textClassificationRuntimeLabel } from './model-kind'
 import type { JevInfo, ModelEntry } from './types'
 
 const JEV_INFO: JevInfo = {
@@ -47,6 +47,30 @@ describe('isSystemOneModel', () => {
 
   it('rejects an ordinary chat model', () => {
     expect(isSystemOneModel(model({ key: 'qwen3-8b' }))).toBe(false)
+  })
+})
+
+// ADR-444: one feature, two runtimes. The runtime is what still differs: a model on vLLM replaces the primary and
+// takes the Workspace over, one on the Laya engine loads beside it.
+describe('textClassificationRuntime', () => {
+  it('is vLLM for a Jev model', () => {
+    expect(textClassificationRuntime(model({ jev: JEV_INFO }))).toBe('vllm')
+  })
+
+  it('is the Laya engine for a Laya model', () => {
+    expect(textClassificationRuntime(model({ laya: { checkpoints: ['english'] } }))).toBe('laya')
+  })
+
+  it('is null for a chat model, including a load target whose descriptors are null', () => {
+    expect(textClassificationRuntime(model({ key: 'qwen3-8b' }))).toBeNull()
+    expect(textClassificationRuntime({ jev: null, laya: null })).toBeNull()
+  })
+})
+
+describe('textClassificationRuntimeLabel', () => {
+  it('names each runtime the way a model row shows it', () => {
+    expect(textClassificationRuntimeLabel('vllm')).toBe('vLLM')
+    expect(textClassificationRuntimeLabel('laya')).toBe('Laya engine')
   })
 })
 

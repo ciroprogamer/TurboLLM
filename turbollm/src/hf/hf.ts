@@ -5,8 +5,11 @@
 // them to a stable error envelope.
 import { quantFromName } from '../gguf/gguf'
 import { detectJev } from '../models/jev'
+import type { TextClassifierRuntime } from '../models/text-classifier'
 import { findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES, type HfCheckpoint } from './checkpoints'
-import { isLayaRepo, layaRepoFiles } from './laya-repo'
+import { isLayaEngineRepo, isLayaRepo, isOtherRuntimePort, layaRepoFiles } from './laya-repo'
+import { repoIdOf } from './repo-id'
+import { findTextClassificationRepos, type ListedModel } from './text-classification-search'
 
 const BASE = 'https://huggingface.co'
 const CACHE_TTL_MS = 5 * 60 * 1000
@@ -36,6 +39,8 @@ export interface HfSearchItem {
   updatedAt: string
   gated: boolean
   tags: string[]
+  /** Only on {@link HfClient.searchTextClassification} rows: the engine the repo loads on (ADR-444). */
+  textClassification?: { runtime: TextClassifierRuntime }
 }
 
 /** Sort options for both search and browse (spec 10 §7 rewrite). 'best-match' is HF's
@@ -65,19 +70,9 @@ function libraryFilterFor(engineKind?: string): string {
   return 'filter=gguf&'
 }
 
-/** A Laya-tagged repo the Laya engine can run: a transformers/laya checkpoint, not an MLX, CoreML, ONNX or ggmlc
- *  GGUF port. Whether its folder really is a Laya bundle is decided when it is opened (laya-repo.ts). */
-function isLayaEngineRepo(m: RawSearchItem): boolean {
-  return m.library_name === 'transformers' || m.library_name === 'laya'
-}
-
-function repoIdOf(m: RawSearchItem): string {
-  return m.id ?? m.modelId ?? ''
-}
-
 function toSearchItem(m: RawSearchItem): HfSearchItem {
   return {
-    repo: m.id ?? m.modelId ?? '',
+    repo: repoIdOf(m),
     downloads: m.downloads ?? 0,
     likes: m.likes ?? 0,
     updatedAt: m.lastModified ?? m.createdAt ?? '',
@@ -161,20 +156,33 @@ export class HfClient {
    *  from `sort=downloads`, not just an alias for it). Format filter adapts to the active
    *  engine kind (never hardcoded to GGUF) — see {@link libraryFilterFor}. */
   async searchModels(query: string, engineKind?: string, sort: HfSortOption = 'best-match'): Promise<HfSearchItem[]> {
-    const q = query.trim()
-    const sortParam = sort === 'best-match' ? '' : `sort=${SORT_PARAM[sort]}&direction=-1&`
-    const search = (filter: string) =>
-      `${BASE}/api/models?search=${encodeURIComponent(q)}&${filter}${sortParam}limit=30&full=false`
     const filter = libraryFilterFor(engineKind)
     // The Laya engine is never the active engine (ADR-443), so a format-narrowed search would never show a Laya
     // repo it can run. Best-effort: a failed Laya search leaves the search as it was.
     const [raw, laya] = await Promise.all([
-      this.getJson<RawSearchItem[]>(search(filter)),
-      filter ? this.getJson<RawSearchItem[]>(search('filter=laya&')).catch(() => []) : Promise.resolve([]),
+      this.getJson<RawSearchItem[]>(this.searchUrl(query, filter, sort)),
+      filter ? this.getJson<RawSearchItem[]>(this.searchUrl(query, 'filter=laya&', sort)).catch(() => []) : Promise.resolve([]),
     ])
     const runnable = laya.filter(isLayaEngineRepo)
     const listed = new Set(runnable.map(repoIdOf))
     return [...runnable, ...raw.filter((m) => !listed.has(repoIdOf(m)))].map(toSearchItem)
+  }
+
+  /** Discover's "Text classification" category (ADR-444): the Laya bundles and verified Jev (NLI) models matching
+   *  `query`, whichever engine is active; an empty query browses the category. Rows as {@link searchModels}'s, each
+   *  with the runtime it loads on. */
+  async searchTextClassification(query: string, sort: HfSortOption = 'best-match'): Promise<HfSearchItem[]> {
+    const repos = await findTextClassificationRepos(sort, {
+      listModels: (params) => this.getJson<ListedModel[]>(this.searchUrl(query, `${params}&`, sort)),
+      readConfig: (repo, dir) => this.getJson<unknown>(this.checkpointConfigUrl(repo, dir)),
+    })
+    return repos.map(({ model, runtime }) => ({ ...toSearchItem(model), textClassification: { runtime } }))
+  }
+
+  /** Up to 30 rows matching `query`; `filter` is '' or ends in '&'. */
+  private searchUrl(query: string, filter: string, sort: HfSortOption): string {
+    const sortParam = sort === 'best-match' ? '' : `sort=${SORT_PARAM[sort]}&direction=-1&`
+    return `${BASE}/api/models?search=${encodeURIComponent(query.trim())}&${filter}${sortParam}limit=30&full=false`
   }
 
   /** Browse repos with no search term (spec 10 §7 rewrite) — the live equivalent of
@@ -205,7 +213,7 @@ export class HfClient {
     let files: HfRepoFile[]
     let safetensors: boolean | undefined
     let checkpoints: HfCheckpoint[] | undefined
-    const laya = isSafetensors && isLayaRepo(tree)
+    const laya = isSafetensors && isLayaRepo(tree) && !isOtherRuntimePort(info)
     if (laya) {
       safetensors = true
       files = layaRepoFiles(tree, (path) => this.fileUrl(repo, path))
@@ -272,12 +280,16 @@ export class HfClient {
 
   private async jevBadge(repo: string, dir: string): Promise<HfCheckpoint['jev']> {
     try {
-      const cfg = await this.getJson<unknown>(`${BASE}/${repo}/resolve/main/${dir ? `${dir}/` : ''}config.json`)
+      const cfg = await this.getJson<unknown>(this.checkpointConfigUrl(repo, dir))
       const jev = detectJev(cfg)
       return jev ? { architecture: jev.architecture, verified: jev.verified } : null
     } catch {
       return null
     }
+  }
+
+  private checkpointConfigUrl(repo: string, dir: string): string {
+    return `${BASE}/${repo}/resolve/main/${dir ? `${dir}/` : ''}config.json`
   }
 
   /** Expand a chosen GGUF into every concrete file needed for a working model
@@ -490,7 +502,8 @@ export class HfClient {
 
 // ── tree → logical files ───────────────────────────────────────────────────
 
-interface RawSearchItem {
+/** One raw row of HF's model list. Exported for `text-classification-search.ts`, which expands it. */
+export interface RawSearchItem {
   id?: string
   modelId?: string
   library_name?: string
@@ -503,6 +516,7 @@ interface RawSearchItem {
 }
 
 interface RawRepoInfo {
+  library_name?: string
   downloads?: number
   likes?: number
   gated?: boolean | string

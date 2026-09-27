@@ -139,7 +139,8 @@ import type {
   EnginesList,
   UpdatePolicy,
   HfRepoDetail,
-  HfSearchResult,
+  HfSearchCategory,
+  HfSearchRows,
   HfSortOption,
   HwUsage,
   LoadProfile,
@@ -902,16 +903,30 @@ export function useConnect(cli: string) {
 
 // ── Hugging Face discovery (spec 10 §2–4, §7 rewrite) ────────────────────────
 /** Search (q set) or browse (q blank — replaces the old hardcoded "Featured" list)
- *  HF repos, sorted by `sort`. Always enabled: DiscoverTab shows this list whether or
- *  not the user has typed a query, so there's no empty-query gate to disable it. */
-export function useHfSearch(q: string, sort: HfSortOption = 'best-match'): UseQueryResult<HfSearchResult> {
+ *  HF repos, sorted by `sort`, from the engine's list or from `category` (ADR-444). Always
+ *  enabled: DiscoverTab shows this list whether or not the user has typed a query, so
+ *  there's no empty-query gate to disable it. */
+export function useHfSearch(
+  q: string,
+  sort: HfSortOption = 'best-match',
+  category?: HfSearchCategory,
+): UseQueryResult<HfSearchRows> {
   return useQuery({
-    queryKey: ['hf-search', q, sort],
-    queryFn: () => hfSearch(q, sort),
+    queryKey: hfSearchKey(q, sort, category),
+    queryFn: () => hfSearch(q, sort, category),
     retry: false,
-    placeholderData: (prev) => prev,
+    // Previous rows stand in only within one list: across a category switch they are the other list's.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[HF_SEARCH_KEY_CATEGORY] === category ? prev : undefined),
   })
 }
+
+/** A search's cache key. The category is in it because the category is a different list from the engine's. */
+function hfSearchKey(q: string, sort: HfSortOption, category: HfSearchCategory | undefined): unknown[] {
+  return ['hf-search', q, sort, category]
+}
+
+/** Where {@link hfSearchKey} puts the category. */
+const HF_SEARCH_KEY_CATEGORY = 3
 
 /** Repo detail (files + sizes + gated). Disabled until a repo is selected. While
  *  the daemon is still hashing size-matching local files (`verifying`), re-poll so

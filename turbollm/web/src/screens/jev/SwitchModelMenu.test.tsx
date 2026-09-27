@@ -4,7 +4,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { SwitchModelMenu, switchToModel } from './SwitchModelMenu'
+import { SwitchModelMenu, ejectModel, switchToModel } from './SwitchModelMenu'
 import type { JevStatus, ModelEntry } from '../../lib/types'
 
 const h = vi.hoisted(() => ({ track: vi.fn(), toastError: vi.fn() }))
@@ -48,6 +48,13 @@ const CHAT = model({ key: 'gemma-27b', name: 'Gemma 27B' })
 const OTHER_JEV = model({ key: 'jev-other', name: 'Other NLI', jev: { ...JEV_INFO, labels: [...JEV_INFO.labels] } })
 const LAYA = model({ key: 'laya', name: 'Laya', laya: { checkpoints: ['english', 'multilingual'] } })
 
+/** The row a model's button sits in: the button and, for a text classification model, its runtime label. */
+function rowOf(name: string): HTMLElement {
+  const row = screen.getByRole('button', { name }).parentElement
+  if (row === null) throw new Error(`The ${name} button is not in a row.`)
+  return row
+}
+
 function renderMenu(models: ModelEntry[], current: JevStatus = CURRENT) {
   const onPick = vi.fn()
   render(<SwitchModelMenu current={current} models={models} onPick={onPick} />)
@@ -63,7 +70,7 @@ describe('SwitchModelMenu', () => {
   it('groups what can be loaded by what it is', () => {
     renderMenu([CHAT, OTHER_JEV])
     expect(screen.getByText('Chat models')).toBeTruthy()
-    expect(screen.getByText('Jev models')).toBeTruthy()
+    expect(screen.getByText('Text classification models')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Gemma 27B' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Other NLI' })).toBeTruthy()
   })
@@ -71,21 +78,25 @@ describe('SwitchModelMenu', () => {
   it('leaves out a group with nothing in it', () => {
     renderMenu([CHAT])
     expect(screen.getByText('Chat models')).toBeTruthy()
-    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Text classification models')).toBeNull()
   })
 
-  // POST /v1/systemone now answers with either a Jev or a Laya model (ADR-439 follow-up), so
-  // the picker offers Laya models too, grouped separately from Jev's own vLLM-served ones.
-  it('also groups Laya models, separately from Jev', () => {
+  // POST /v1/systemone answers with either a Jev or a Laya model (ADR-439 follow-up), and ADR-444 names both
+  // "text classification": one group, each row saying which runtime serves it.
+  it('puts Jev and Laya models in one text classification group', () => {
     renderMenu([CHAT, OTHER_JEV, LAYA])
-    expect(screen.getByText('Jev models')).toBeTruthy()
-    expect(screen.getByText('Laya models')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Laya' })).toBeTruthy()
+    const group = screen.getByRole('group', { name: 'Text classification models' })
+    expect(within(group).getByRole('button', { name: 'Other NLI' })).toBeTruthy()
+    expect(within(group).getByRole('button', { name: 'Laya' })).toBeTruthy()
+    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Laya models')).toBeNull()
   })
 
-  it('leaves out the Laya group when there is nothing in it', () => {
-    renderMenu([CHAT, OTHER_JEV])
-    expect(screen.queryByText('Laya models')).toBeNull()
+  it('labels each text classification row with its runtime, and a chat row with none', () => {
+    renderMenu([CHAT, OTHER_JEV, LAYA])
+    expect(rowOf('Other NLI').textContent).toBe('Other NLIvLLM')
+    expect(rowOf('Laya').textContent).toBe('LayaLaya engine')
+    expect(rowOf('Gemma 27B').textContent).toBe('Gemma 27B')
   })
 
   it('offers only models that could actually load right now', () => {
@@ -102,7 +113,7 @@ describe('SwitchModelMenu', () => {
 
   it('does not offer the model that is already loaded', () => {
     renderMenu([CHAT, model({ key: CURRENT.key, name: CURRENT.name, jev: { ...JEV_INFO, labels: [...JEV_INFO.labels] }, loaded: true })])
-    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Text classification models')).toBeNull()
     expect(screen.queryByRole('button', { name: CURRENT.name })).toBeNull()
   })
 
@@ -112,7 +123,7 @@ describe('SwitchModelMenu', () => {
     renderMenu([model({ key: 'gguf', name: 'Wrong format', compatibleWithActiveEngine: false })])
     expect(screen.getByText('Nothing else here can load on the active engine. Change it on the Engines screen.')).toBeTruthy()
     expect(screen.queryByText('Chat models')).toBeNull()
-    expect(screen.queryByText('Jev models')).toBeNull()
+    expect(screen.queryByText('Text classification models')).toBeNull()
   })
 
   it('says nothing of the sort once there is something to pick', () => {
@@ -179,9 +190,9 @@ describe('switchToModel', () => {
     expect(d.requestLoad).toHaveBeenCalledWith(LAYA)
   })
 
-  // A Laya model runs beside chat, so leaving it loaded would keep the playground open: the pick would load in the
-  // background and the screen would not move. Switching model in the playground replaces the playground's model.
-  it('ejects a loaded Laya model when a chat model is picked, so the pick takes the Workspace back to chat', async () => {
+  // A Laya model runs beside chat, so it would stay loaded behind the chat model. Switching model in the playground
+  // replaces the playground's model; going back to chat is the playground's own step (JevPlaygroundScreen.test.tsx).
+  it('ejects a loaded Laya model before loading the chat model picked', async () => {
     const d = deps()
     const layaCurrent = { key: 'laya', name: 'Laya', labels: [], checkpoints: ['english'], state: 'running' as const, slot: 'pool' as const }
     await switchToModel(layaCurrent, CHAT, d)
@@ -224,5 +235,29 @@ describe('switchToModel', () => {
     await switchToModel({ ...CURRENT, slot: 'pool' }, CHAT, d)
 
     expect(h.toastError).toHaveBeenCalledWith('Could not switch model: check the engine logs on the Engines screen.')
+  })
+
+  // ADR-444, amended 2026-09-25: the playground stays open with nothing loaded, and its model list loads from there.
+  it('loads straight away when the playground has nothing loaded', async () => {
+    const d = deps()
+    await switchToModel(null, OTHER_JEV, d)
+    expect(d.stopEngine).not.toHaveBeenCalled()
+    expect(d.requestLoad).toHaveBeenCalledWith(OTHER_JEV)
+  })
+})
+
+describe('ejectModel', () => {
+  it('stops the model\'s own slot and records the eject', async () => {
+    const stopEngine = vi.fn(async () => ({}))
+    await ejectModel(LAYA, { stopEngine })
+    expect(stopEngine).toHaveBeenCalledWith('laya')
+    expect(h.track).toHaveBeenCalledWith('workspace', 'eject_model')
+  })
+
+  it('says why when the model will not eject', async () => {
+    const { ApiError } = await import('../../lib/api')
+    const stopEngine = vi.fn(async () => { throw new ApiError('engine_busy', 'The engine is still generating.', 409) })
+    await ejectModel(LAYA, { stopEngine })
+    expect(h.toastError).toHaveBeenCalledWith('Could not eject model: The engine is still generating.')
   })
 })

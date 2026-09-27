@@ -158,20 +158,20 @@ describe('ModelDetailDialog — how a Jev model will launch', () => {
   it('names the verified launch settings and the architecture they are for', async () => {
     renderDialog(VERIFIED)
     expect(await screen.findByText(
-      'Jev model — launched as a classifier with verified settings for Qwen3_5ForSequenceClassification.',
+      'Text classification model (NLI, vLLM) — launched as a classifier with verified settings for Qwen3_5ForSequenceClassification.',
     )).toBeTruthy()
   })
 
   it('is honest that an unverified architecture falls back to plain pooling', async () => {
     renderDialog(UNVERIFIED)
     expect(await screen.findByText(
-      "Jev model — Not verified: launched with plain --runner pooling; if vLLM can't load it, its own error is shown.",
+      "Text classification model (NLI, vLLM) — Not verified: launched with plain --runner pooling; if vLLM can't load it, its own error is shown.",
     )).toBeTruthy()
   })
 
   it('says nothing of the sort about a chat model', async () => {
     renderDialog(PLAIN)
     await screen.findByRole('button', { name: /load model/i })
-    expect(screen.queryByText(/Jev model —/)).toBeNull()
+    expect(screen.queryByText(/Text classification model \(NLI, vLLM\) —/)).toBeNull()
   })
 })

@@ -573,8 +573,8 @@ export function ModelDetailDialog({
             {detail.jev && (
               <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 text-[12px] text-muted">
                 {detail.jev.verified
-                  ? `Jev model — launched as a classifier with verified settings for ${detail.jev.architecture}.`
-                  : "Jev model — Not verified: launched with plain --runner pooling; if vLLM can't load it, its own error is shown."}
+                  ? `Text classification model (NLI, vLLM) — launched as a classifier with verified settings for ${detail.jev.architecture}.`
+                  : "Text classification model (NLI, vLLM) — Not verified: launched with plain --runner pooling; if vLLM can't load it, its own error is shown."}
               </div>
             )}
 

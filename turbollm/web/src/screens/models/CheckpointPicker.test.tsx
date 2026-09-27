@@ -81,13 +81,13 @@ describe('CheckpointPicker — rows', () => {
 
   it('marks a Jev checkpoint, and tags an unverified architecture rather than hiding it', () => {
     renderPicker()
-    expect(screen.getAllByText('Jev model')).toHaveLength(3)
+    expect(screen.getAllByText('Text classification')).toHaveLength(3)
     expect(screen.getAllByText('Not verified')).toHaveLength(1)
   })
 
   it('says nothing about Jev for a plain safetensors checkpoint', () => {
     renderPicker({ checkpoints: [checkpoint({ jev: null })] })
-    expect(screen.queryByText('Jev model')).toBeNull()
+    expect(screen.queryByText('Text classification')).toBeNull()
     expect(screen.queryByText('Not verified')).toBeNull()
   })
 

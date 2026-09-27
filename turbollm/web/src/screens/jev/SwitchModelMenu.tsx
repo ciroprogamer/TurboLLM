@@ -2,11 +2,12 @@
 //
 // An inline list rather than a dropdown: it is the only navigation this screen has, and it
 // answers the question the screen raises — "how do I get back to Chat?" — without a click to
-// discover it. Nothing here navigates; loading a chat model clears `status.jev`, and the
-// Workspace gate takes the user back on its own.
+// discover it. Nothing here navigates: the playground takes the user back to Chat once a chat
+// model picked here has replaced its own.
 import { ApiError, track } from '../../lib/api'
 import type { LoadOptions, LoadTarget } from '../../lib/model-loader'
 import { isSystemOneModel } from '../../lib/model-kind'
+import { TextClassificationRuntimeLabel } from '../../components/TextClassificationRuntimeLabel'
 import { toast } from '../../components/ui/sonner'
 import type { LoadedJev, ModelEntry } from '../../lib/types'
 
@@ -35,8 +36,7 @@ export function SwitchModelMenu({
       ) : (
         <>
           <ModelGroup title="Chat models" models={loadable.filter((m) => !isSystemOneModel(m))} onPick={onPick} />
-          <ModelGroup title="Jev models" models={loadable.filter((m) => m.jev)} onPick={onPick} />
-          <ModelGroup title="Laya models" models={loadable.filter((m) => m.laya)} onPick={onPick} />
+          <ModelGroup title="Text classification models" models={loadable.filter((m) => isSystemOneModel(m))} onPick={onPick} />
         </>
       )}
     </div>
@@ -46,11 +46,18 @@ export function SwitchModelMenu({
 /** ADR-427: a Jev model in a POOL slot keeps its own engine, so a chat pick has to eject that
  *  slot — a primary swap already replaces what is running. A slot that refuses to eject stops
  *  the switch and says so: loading on top of it would leave the playground open with no
- *  explanation. */
-export async function switchToModel(current: LoadedJev, m: ModelEntry, deps: SwitchDeps): Promise<void> {
+ *  explanation. With nothing loaded (ADR-444, amended 2026-09-25) there is nothing to eject. */
+export async function switchToModel(current: LoadedJev | null, m: ModelEntry, deps: SwitchDeps): Promise<void> {
   track('workspace', 'jev_switch_model')
-  if (needsEject(current, m) && !(await ejected(current, deps))) return
+  if (current && needsEject(current, m) && !(await ejected(current, deps))) return
   deps.requestLoad(m)
+}
+
+/** The playground's model list ejects a model in place. A refusal says so, or the row would look as if the click
+ *  did nothing. */
+export async function ejectModel(m: ModelEntry, deps: Pick<SwitchDeps, 'stopEngine'>): Promise<void> {
+  track('workspace', 'eject_model')
+  await stoppedOrReported(m.key, deps, (e) => `Could not eject model: ${failureReason(e)}`)
 }
 
 /** Only a primary slot is replaced by the load itself. An unknown slot (the catalog fallback
@@ -65,18 +72,26 @@ function needsEject(current: LoadedJev, m: ModelEntry): boolean {
   return !m.jev && current.slot !== 'primary'
 }
 
-async function ejected(current: LoadedJev, deps: SwitchDeps): Promise<boolean> {
+function ejected(current: LoadedJev, deps: SwitchDeps): Promise<boolean> {
+  return stoppedOrReported(current.key, deps, (e) => `Could not switch model: ${failureReason(e)}`)
+}
+
+async function stoppedOrReported(
+  key: string,
+  deps: Pick<SwitchDeps, 'stopEngine'>,
+  failureMessage: (e: unknown) => string,
+): Promise<boolean> {
   try {
-    await deps.stopEngine(current.key)
+    await deps.stopEngine(key)
     return true
   } catch (e) {
-    toast.error(switchFailureMessage(e))
+    toast.error(failureMessage(e))
     return false
   }
 }
 
-function switchFailureMessage(e: unknown): string {
-  return `Could not switch model: ${e instanceof ApiError ? e.message : 'check the engine logs on the Engines screen.'}`
+function failureReason(e: unknown): string {
+  return e instanceof ApiError ? e.message : 'check the engine logs on the Engines screen.'
 }
 
 function ModelGroup({ title, models, onPick }: { title: string; models: ModelEntry[]; onPick: (m: ModelEntry) => void }) {
@@ -85,20 +100,27 @@ function ModelGroup({ title, models, onPick }: { title: string; models: ModelEnt
     <div className="flex flex-col gap-1" role="group" aria-label={title}>
       <span className="text-[12px] font-medium text-muted">{title}</span>
       {models.map((m) => (
-        <button
-          key={m.key}
-          type="button"
-          onClick={() => onPick(m)}
-          className="rounded px-2 py-1 text-left text-[13px] text-ink hover:bg-panel-2"
-        >
-          {m.name}
-        </button>
+        // The runtime label sits outside the button, so the button is still named for the model alone.
+        <div key={m.key} className="flex items-center gap-2 pr-2">
+          <button
+            type="button"
+            onClick={() => onPick(m)}
+            className="flex-1 rounded px-2 py-1 text-left text-[13px] text-ink hover:bg-panel-2"
+          >
+            {m.name}
+          </button>
+          <TextClassificationRuntimeLabel model={m} />
+        </div>
       ))}
     </div>
   )
 }
 
-/** Only models that would really load right now — an offer that 400s is worse than no offer. */
 function canLoad(m: ModelEntry, current: LoadedJev): boolean {
-  return !m.incomplete && !m.parseError && m.compatibleWithActiveEngine && !m.embedding && m.key !== current.key
+  return canLoadNow(m) && m.key !== current.key
+}
+
+/** Only models that would really load right now — an offer that 400s is worse than no offer. */
+export function canLoadNow(m: ModelEntry): boolean {
+  return !m.incomplete && !m.parseError && m.compatibleWithActiveEngine && !m.embedding
 }

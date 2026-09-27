@@ -23,11 +23,40 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [1.14.2] - 2026-09-27
+
+### Added
+
+- **A "Text classification" category in Models → Discover.** Jev (NLI) and Laya models are both text classification
+  models, so one chip beside the sort menu now finds both, whichever chat engine is active. It lists only what
+  TurboLLM can run: a Laya bundle, or an NLI cross-encoder confirmed from its own `config.json`. Sentiment and
+  toxicity classifiers, and repos with no `.safetensors` weights, are left out. Each row shows the runtime it loads on
+  (Laya engine or vLLM).
+- `GET /v1/models` marks these models with `"task": "text-classification"`. `kind` (`jev` or `laya`) is unchanged.
+  `GET /api/v1/status` gains `textClassification`, beside `jev` and `laya`.
+- **A Form view for the text classification playground's `questions` field**, beside the existing JSON view, with a
+  toggle to switch between them. Form shows one card per question — an id, a type (Yes/no, Pick one, Scale),
+  instructions, and type-specific fields: an optional "what does yes look like" for Yes/no, an option list for Pick
+  one, and an ordered, reorderable level list for Scale. The JSON text stays the single source of truth; editing a
+  question through the form never rewrites another, untouched question's structured JSON. Two questions sharing an
+  id, or two options sharing a name, are flagged right on the card and block Run, instead of silently dropping a
+  question the next time the draft is saved.
+
 ### Changed
 
 - **Desktop app on macOS and Linux: stopping the daemon from outside the app now closes the app.**
   For example, `turbollm --stop` in a terminal used to leave the window open with no daemon behind
   it.
+- **Jev and Laya are now presented as one thing, "text classification".** The playground, the Models badge, the
+  ready toast, the switch-model menu and the error messages all say so. The playground moved to
+  `/workspace/text-classification`; the old `/workspace/jev` address redirects to it. A Jev model still takes the
+  Workspace over while it is loaded, and a Laya model still loads beside your chat model.
+- **The playground is a real Workspace tab.** A **Text classification** tab sits under Chat, Code and Routines
+  whenever your library holds a text classification model, and stays after you eject it. This replaces the
+  "Open playground" link that used to sit under the tabs. The playground's left column has the same tabs and lists
+  your text classification models with Load and Eject; with none loaded it says so and lets you load one.
 
 ### Fixed
 
@@ -37,7 +66,6 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   still running from the install folder, which could outlive the window and keep its files locked. If
   that still fails (for example when TurboLLM was started as administrator), the same message appears:
   close TurboLLM yourself and click Retry, which runs the whole automatic close again.
-
 - **Desktop app: quitting after a daemon restart now stops the daemon too.** Restarting the daemon
   from Settings used to start the new daemon as a separate background process the app lost track
   of, so it kept running after you quit TurboLLM, holding port 6996 and files in the install
@@ -45,6 +73,26 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   [#250](https://github.com/mohitsoni48/TurboLLM/issues/250)). The app now starts the restarted
   daemon itself and stops it when you quit. Restarting from a terminal (`npx turbollm` or a global
   npm install) is unchanged.
+- **A Laya model could be picked where a chat model is required.** A routine and the `create_routine` tool refused a
+  Jev model but accepted a Laya one, `turbollm launch` (also with `--model`) offered a Laya model to a coding agent,
+  and `list_models` didn't mark it. All of them now treat both as text classification models.
+- **The text classification playground's `questions` and `state` fields didn't reformat on their own.** Leaving a
+  field now tidies valid JSON automatically, the same reformat the Format button already ran.
+- **Tab, in either field, moved focus to the Format button instead of indenting.** Tab now inserts an indent, as in
+  a code editor; Shift+Tab still moves focus backward.
+- **An answer card didn't show which question it answered.** Two yes/no questions read identically ("0.945
+  entailment probability") with nothing on screen to tell them apart. Every card now shows its question's id.
+
+### Discord
+
+- **Jev and Laya are now one thing in the app: "text classification".** Find either kind from one chip in Discover,
+  and switch to it from a real tab beside Chat, Code and Routines.
+- **The questions you ask it can now be built with a form** — dropdowns and text fields — instead of hand-written
+  JSON only. Switch between Form and JSON any time; both stay in sync.
+- A batch of playground polish: JSON reformats itself when you tab away, Tab indents instead of jumping to a button,
+  and every answer now shows which question it's for.
+- **Windows installer users:** updating TurboLLM while it's running no longer gets stuck at "TurboLLM cannot be
+  closed" (GitHub #250).
 
 ## [1.14.1] - 2026-09-25
 

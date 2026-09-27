@@ -138,12 +138,16 @@ function appWithPrimary(primaryKey: string | null) {
   return app
 }
 
-async function statusJev(primaryKey: string | null): Promise<unknown> {
+async function statusField(primaryKey: string | null, field: string): Promise<unknown> {
   const res = await appWithPrimary(primaryKey).request('/api/v1/status')
   assert.equal(res.status, 200)
   const body = (await res.json()) as Record<string, unknown>
-  assert.ok('jev' in body, 'status must always carry the jev field')
-  return body.jev
+  assert.ok(field in body, `status must always carry the ${field} field`)
+  return body[field]
+}
+
+async function statusJev(primaryKey: string | null): Promise<unknown> {
+  return statusField(primaryKey, 'jev')
 }
 
 test('GET /api/v1/status reports jev:null when no Jev model is alive', async () => {
@@ -154,6 +158,19 @@ test('GET /api/v1/status reports jev:null when no Jev model is alive', async () 
 test('GET /api/v1/status reports the loaded Jev model', async () => {
   assert.deepEqual(await statusJev(JEV_KEY), {
     key: JEV_KEY, name: 'qwen3.5 4b nli v2', labels: OPENJEV.labels, state: 'running', slot: 'primary',
+  })
+})
+
+// ADR-444: `textClassification` is the one field the UI reads for "which text classification model is alive",
+// beside the per-runtime `jev` and `laya` fields, which stay.
+test('GET /api/v1/status reports textClassification:null when no text classification model is alive', async () => {
+  assert.equal(await statusField(null, 'textClassification'), null)
+  assert.equal(await statusField(GGUF_KEY, 'textClassification'), null)
+})
+
+test('GET /api/v1/status reports a loaded Jev model as the vLLM text classifier', async () => {
+  assert.deepEqual(await statusField(JEV_KEY, 'textClassification'), {
+    key: JEV_KEY, name: 'qwen3.5 4b nli v2', runtime: 'vllm', state: 'running', slot: 'primary', labels: OPENJEV.labels,
   })
 })
 
@@ -172,6 +189,58 @@ test('registerApi registers GET /api/v1/activity', async () => {
 
   assert.equal(res.status, 200)
   assert.deepEqual(await res.json(), { items: [], engineGenerating: false })
+})
+
+// ADR-444: Discover's "Text classification" category is `?category=text-classification` on the same search route.
+function appWithHfSearch(hf: Record<string, unknown>) {
+  const d = {
+    store: { snapshot: () => ({}) },
+    hf,
+    registry: { active: () => ({ kind: 'llama-server' }) },
+    scanner: { list: () => ({ models: [], scanning: false, lastScanAt: '' }) },
+  } as unknown as Deps
+  const app = new Hono()
+  registerApi(app, d)
+  return app
+}
+
+test('GET /api/v1/hf/search?category=text-classification searches the category, whatever engine is active', async () => {
+  const calls: unknown[][] = []
+  const row = { repo: 'convaiinnovations/laya', downloads: 0, likes: 3503, updatedAt: '', gated: false, tags: [], textClassification: { runtime: 'laya' } }
+  const hf = {
+    searchTextClassification: async (...args: unknown[]) => (calls.push(args), [row]),
+    searchModels: async () => { throw new Error('the category must not fall back to the engine-adapted search') },
+    browseModels: async () => { throw new Error('the category must not fall back to browse') },
+  }
+
+  const res = await appWithHfSearch(hf).request('/api/v1/hf/search?q=laya&sort=downloads&category=text-classification')
+
+  assert.equal(res.status, 200)
+  assert.deepEqual(calls, [['laya', 'downloads']])
+  const body = (await res.json()) as { results: { repo: string; localCount: number; textClassification: unknown }[] }
+  assert.deepEqual(body.results.map((r) => [r.repo, r.localCount, r.textClassification]), [
+    ['convaiinnovations/laya', 0, { runtime: 'laya' }],
+  ])
+})
+
+test('GET /api/v1/hf/search browses the category when no query is typed', async () => {
+  const calls: unknown[][] = []
+  const hf = { searchTextClassification: async (...args: unknown[]) => (calls.push(args), []) }
+
+  const res = await appWithHfSearch(hf).request('/api/v1/hf/search?category=text-classification')
+
+  assert.equal(res.status, 200)
+  assert.deepEqual(calls, [['', 'best-match']])
+})
+
+test('GET /api/v1/hf/search ignores an unknown category and searches as before', async () => {
+  const calls: unknown[][] = []
+  const hf = { searchModels: async (...args: unknown[]) => (calls.push(args), []) }
+
+  const res = await appWithHfSearch(hf).request('/api/v1/hf/search?q=qwen&category=sentiment')
+
+  assert.equal(res.status, 200)
+  assert.deepEqual(calls, [['qwen', 'llama-server', 'best-match']])
 })
 
 // The HF repo-detail route overlays each checkpoint row with "is it already downloaded, and

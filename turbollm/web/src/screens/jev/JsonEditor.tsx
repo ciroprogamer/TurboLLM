@@ -19,7 +19,7 @@ interface JsonEditorProps {
 
 /** Tab is captured here to indent (see `onKeyDown` below), so the field's caption must say how to
  *  still leave it by keyboard — WCAG 2.1.2 requires the escape route be disclosed, not just exist. */
-export const TAB_INDENT_HINT = 'Shift+Tab moves to the next field.'
+export const TAB_INDENT_HINT = 'Tab indents. Shift+Tab moves to the previous field.'
 
 /** The look the request's fields share, so the questions form and the Example picker beside these
  *  editors read as one page. */
@@ -206,9 +206,10 @@ function hasDuplicateKeys(text: string): boolean {
       const { text: literal, end } = readJsonString(text, i)
       i = end
       if (isKey) {
+        const key = decodeJsonStringLiteral(literal)
         const seen = seenKeysByDepth.at(-1)
-        if (seen?.has(literal)) return true
-        seen?.add(literal)
+        if (seen?.has(key)) return true
+        seen?.add(key)
         i = skipToAfterColon(text, i)
       }
       atMemberStart = false
@@ -221,7 +222,8 @@ function hasDuplicateKeys(text: string): boolean {
 }
 
 /** The raw (still-escaped) text of the string starting at `text[start]` (a `"`), and the index just past
- *  its closing quote. The escaped form is enough to tell two keys apart; it never needs decoding here. */
+ *  its closing quote. Callers that need to compare string *values* must decode it first — two different
+ *  escaped forms, e.g. `a` and `a`, can be the same key once JSON.parse decodes them. */
 function readJsonString(text: string, start: number): { text: string; end: number } {
   let i = start + 1
   let literal = ''
@@ -231,6 +233,12 @@ function readJsonString(text: string, start: number): { text: string; end: numbe
     i++
   }
   return { text: literal, end: i + 1 }
+}
+
+/** Decodes a JSON string literal's escapes (`\uXXXX`, `\n`, `\/`, ...). `literal` came from text that
+ *  `JSON.parse` already accepted, so wrapping it back in quotes and parsing it is always valid. */
+function decodeJsonStringLiteral(literal: string): string {
+  return JSON.parse(`"${literal}"`) as string
 }
 
 function skipToAfterColon(text: string, from: number): number {

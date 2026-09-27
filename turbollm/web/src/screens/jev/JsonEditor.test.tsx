@@ -201,12 +201,15 @@ describe('JsonEditor', () => {
   // A json-or-text field sends a bare number/boolean/null as the literal STRING typed (stateFromText
   // keeps text unless it parses to an object, array or string) — reformatting it would silently swap
   // the sent value from that string to the parsed number. Reported live: '1.50' became '1.5' on blur.
-  it('disables Format, and does not reformat on blur, for a bare number/boolean/null in json-or-text mode', () => {
-    const { onChange } = renderEditor({ mode: 'json-or-text', value: '1.50' })
-    expect(formatButton()).toBeDisabled()
-    fireEvent.blur(screen.getByLabelText('state'))
-    expect(onChange).not.toHaveBeenCalled()
-  })
+  it.each(['1.50', 'true', 'null'])(
+    'disables Format, and does not reformat on blur, for the bare literal %s in json-or-text mode',
+    (value) => {
+      const { onChange } = renderEditor({ mode: 'json-or-text', value })
+      expect(formatButton()).toBeDisabled()
+      fireEvent.blur(screen.getByLabelText('state'))
+      expect(onChange).not.toHaveBeenCalled()
+    },
+  )
 
   it('still formats an object, array or string in json-or-text mode, where the parsed value is what is sent', () => {
     const { onChange } = renderEditor({ mode: 'json-or-text', value: '{"a":1}' })
@@ -237,6 +240,13 @@ describe('JsonEditor', () => {
 
   it('still catches a real duplicate key even when an earlier value is the string form of that key', () => {
     const value = '{"a":"a","a":1}'
+    const { onChange } = renderEditor({ mode: 'json', value })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('catches a duplicate key hidden behind a different escaping of the same character', () => {
+    const value = '{"a":1,"\\u0061":2}'
     const { onChange } = renderEditor({ mode: 'json', value })
     fireEvent.blur(screen.getByLabelText('state'))
     expect(onChange).not.toHaveBeenCalled()

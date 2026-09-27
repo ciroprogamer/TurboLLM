@@ -319,7 +319,7 @@ describe('QuestionsFormEditor with a repeated id or option name', () => {
     const { onText } = renderHosted({ urgent: URGENT, team: TEAM })
     onText.mockClear()
     fireEvent.change(fieldOf(2, 'id'), { target: { value: 'urgent' } })
-    for (const call of onText.mock.calls) expect(Object.keys(JSON.parse(call[0]))).toHaveLength(2)
+    expect(onText).not.toHaveBeenCalled() // held back entirely, not sent with the duplicate collapsed
     expect(questionIds()).toHaveLength(2) // both cards are still on screen, whatever the held-back text says
   })
 
@@ -337,10 +337,7 @@ describe('QuestionsFormEditor with a repeated id or option name', () => {
     const { onText } = renderHosted({ urgent: URGENT, team: TEAM })
     onText.mockClear()
     fireEvent.change(fieldOf(2, 'Name of option 2 of team'), { target: { value: 'billing' } })
-    for (const call of onText.mock.calls) {
-      const sent = JSON.parse(call[0]) as { team: { criteria: Record<string, string> } }
-      expect(Object.keys(sent.team.criteria)).toHaveLength(2)
-    }
+    expect(onText).not.toHaveBeenCalled() // held back entirely, not sent with an option collapsed
     expect(fieldOf(2, 'Name of option 1 of team')).toHaveValue('billing')
     expect(fieldOf(2, 'Name of option 2 of team')).toHaveValue('billing') // both cards stay on screen
   })

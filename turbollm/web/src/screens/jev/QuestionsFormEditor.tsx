@@ -53,7 +53,7 @@ const fieldInputCls = 'h-8 text-[13px]'
 export function QuestionsFormEditor({ value, onChange, problem, onValidityChange }: QuestionsFormEditorProps) {
   const [rows, setRows] = useState(() => rowsFromQuestionsText(value))
   const sharedIds = duplicateQuestionIds(rows)
-  useReportedValidity(sharedIds.length === 0 && rows.every(hasUniqueOptionNames), onValidityChange)
+  useReportedValidity(!hasAnyClash(rows), onValidityChange)
   // The text this form last sent up. Coming back down as `value` it is only the echo of an edit
   // already on screen; any other text came from outside (an example, a stored draft) and replaces
   // the rows. Re-reading the echo would give every row a new key, and typing would lose the focus.

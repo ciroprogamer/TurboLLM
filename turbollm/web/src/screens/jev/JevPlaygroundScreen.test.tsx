@@ -269,7 +269,8 @@ describe('JevPlaygroundScreen', () => {
   // somewhere on screen, not left for a keyboard-only user to discover by trial and error.
   it('discloses Shift+Tab as the way out of a JSON field that captures Tab for indenting', () => {
     renderScreen()
-    expect(screen.getAllByText(/Shift\+Tab moves to the next field/)).not.toHaveLength(0)
+    // Both the state field and the questions field (JSON view by default) show the hint.
+    expect(screen.getAllByText(/Shift\+Tab moves to the previous field/)).toHaveLength(2)
   })
 
   // jsdom cannot measure overflow; a real 375 px page is checked in the browser pass.

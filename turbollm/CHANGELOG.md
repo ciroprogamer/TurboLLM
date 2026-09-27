@@ -41,9 +41,10 @@ _Nothing yet._
   instructions, and type-specific fields: an optional "what does yes look like" for Yes/no, an option list for Pick
   one, and an ordered, reorderable level list for Scale. The JSON text stays the single source of truth; editing a
   question through the form re-serializes the whole `questions` object, so an untouched question never disappears but
-  can still pick up a dropped `criteria.false`, an empty string for a `null` description, or a renumbered id. Two
-  questions sharing an id, or two options sharing a name, are flagged right on the card and block Run,
-  instead of silently dropping a question the next time the draft is saved.
+  can still pick up a dropped `criteria.false`, an empty string for a `null` description, or (for a purely numeric id)
+  a different position in the object, JavaScript's own key order. Two questions sharing an id, or two options sharing
+  a name, are flagged right on the card and block Run, and are held back from the saved draft, instead of silently
+  dropping a question or option the moment the clash appears.
 
 ### Changed
 
@@ -78,7 +79,9 @@ _Nothing yet._
   Jev model but accepted a Laya one, `turbollm launch` (also with `--model`) offered a Laya model to a coding agent,
   and `list_models` didn't mark it. All of them now treat both as text classification models.
 - **The text classification playground's `questions` and `state` fields didn't reformat on their own.** Leaving a
-  field now tidies valid JSON automatically, the same reformat the Format button already ran.
+  field now tidies valid JSON automatically, the same reformat the Format button already ran — except where that
+  reformat itself would change what's sent: a `state` field holding a bare number, boolean or `null`, or text with a
+  repeated object key, is left as typed until Format is clicked on purpose.
 - **Tab, in either field, moved focus to the Format button instead of indenting.** Tab now inserts an indent, as in
   a code editor; Shift+Tab still moves focus backward.
 - **An answer card didn't show which question it answered.** Two yes/no questions read identically ("0.945

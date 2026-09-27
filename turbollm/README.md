@@ -376,9 +376,13 @@ there. Entirely local; nothing leaves your machine.
 - **Models → Discover → Text classification** finds every model TurboLLM can run for this, whichever chat
   engine is active. Two kinds run today: Jev (NLI cross-encoders on vLLM) and Laya (its own engine).
 - **Load an NLI model (such as OpenJev) and TurboLLM detects it as a Jev model.** Workspace turns
-  into a JSON-first playground: two editors — the content, and the questions you're asking about
-  it — *are* the request. Ctrl/Cmd+Enter to run; see the answers per question, the raw response,
-  and a copyable `curl`.
+  into a playground: two editors — the content, and the questions you're asking about it — *are*
+  the request. Ctrl/Cmd+Enter to run; see the answers per question, the raw response, and a
+  copyable `curl`.
+- **The questions editor has a Form view, too.** Toggle between JSON and Form any time. Form gives
+  you one card per question — a type dropdown (Yes/no, Pick one, Scale), instructions, and the
+  fields each type needs (an option list, an ordered scale) — no hand-written JSON required. Both
+  views stay in sync, and editing one question never touches another's.
 - **`POST /v1/systemone`** answers yes/no, pick-one, and scale questions in one call, using the
   public System One API's exact field names — a client written for that shape only changes its
   base URL and key. `POST /v1/classify` and `POST /v1/rerank` are there too for raw

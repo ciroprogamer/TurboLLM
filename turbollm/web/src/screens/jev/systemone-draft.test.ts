@@ -5,6 +5,7 @@ import { MAX_BODY_CHARS } from '../../lib/systemone-types'
 import type { Question, SystemOneRequest } from '../../lib/systemone-types'
 import { draftRequest, stateFromText } from './systemone-draft'
 import type { DraftProblem, SystemOneDraft } from './systemone-draft'
+import { arraysNestedDeep } from './json-test-text'
 
 const MODEL = 'm'
 const NOUL_QUESTIONS_TEXT = '{"q":{"type":"noul","instructions":"i"}}'
@@ -34,8 +35,7 @@ const Q_MOOD: Question = {
   ],
 }
 
-const nestedText = (depth: number): string => '['.repeat(depth) + ']'.repeat(depth)
-const nested = (depth: number): unknown => JSON.parse(nestedText(depth))
+const nested = (depth: number): unknown => JSON.parse(arraysNestedDeep(depth))
 
 // The messages the server's request rules pin too (architecture section 3.6): each one a complete
 // literal, so a drift in either project's wording turns a test red instead of surprising a user.
@@ -114,7 +114,7 @@ describe('stateFromText', () => {
   })
 
   it('does not throw on a state nested 20,000 deep', () => {
-    expect(Array.isArray(stateFromText(nestedText(20000)))).toBe(true)
+    expect(Array.isArray(stateFromText(arraysNestedDeep(20000)))).toBe(true)
   })
 })
 
@@ -164,7 +164,7 @@ describe('draftRequest', () => {
   })
 
   it('does not throw on a state nested 20,000 deep', () => {
-    const result = draftRequest(MODEL, { stateText: nestedText(20000), questionsText: NOUL_QUESTIONS_TEXT })
+    const result = draftRequest(MODEL, { stateText: arraysNestedDeep(20000), questionsText: NOUL_QUESTIONS_TEXT })
 
     expect(typeof result.ok).toBe('boolean')
   })
@@ -203,13 +203,13 @@ describe('draftRequest accepting a valid draft', () => {
 
 describe('draftRequest nesting', () => {
   it('accepts a state nested 32 deep and refuses one nested 33 deep', () => {
-    expect(acceptedRequest(validDraft({ stateText: nestedText(32) })).state).toEqual(nested(32))
+    expect(acceptedRequest(validDraft({ stateText: arraysNestedDeep(32) })).state).toEqual(nested(32))
 
-    expectRefusedWith(validDraft({ stateText: nestedText(33) }), 'state', MESSAGE.stateTooDeep)
+    expectRefusedWith(validDraft({ stateText: arraysNestedDeep(33) }), 'state', MESSAGE.stateTooDeep)
   })
 
   it.each([5000, 20000])('refuses a state nested %d deep without throwing', (depth) => {
-    expectRefusedWith(validDraft({ stateText: nestedText(depth) }), 'state', MESSAGE.stateTooDeep)
+    expectRefusedWith(validDraft({ stateText: arraysNestedDeep(depth) }), 'state', MESSAGE.stateTooDeep)
   })
 
   it('refuses instructions nested 33 deep and accepts 32', () => {
@@ -235,13 +235,13 @@ describe('draftRequest nesting', () => {
   })
 
   it('refuses a questions text that is an array nested 33 deep', () => {
-    expectRefusedWith(validDraft({ questionsText: nestedText(33) }), 'questions', MESSAGE.questionsTooDeep)
+    expectRefusedWith(validDraft({ questionsText: arraysNestedDeep(33) }), 'questions', MESSAGE.questionsTooDeep)
   })
 
   it('refuses questions nested 20,000 deep without throwing', () => {
-    expectRefusedWith(validDraft({ questionsText: nestedText(20000) }), 'questions', MESSAGE.questionsTooDeep)
+    expectRefusedWith(validDraft({ questionsText: arraysNestedDeep(20000) }), 'questions', MESSAGE.questionsTooDeep)
     expectRefusedWith(
-      validDraft({ questionsText: `{"q":{"type":"noul","instructions":${nestedText(20000)}}}` }),
+      validDraft({ questionsText: `{"q":{"type":"noul","instructions":${arraysNestedDeep(20000)}}}` }),
       'questions.q.instructions',
       MESSAGE.instructionsTooDeep,
     )
@@ -565,7 +565,7 @@ describe('draftRequest problem groups', () => {
   })
 
   it('reports a deep state and deep questions together, one problem each', () => {
-    const problems = problemsFor({ stateText: nestedText(20000), questionsText: nestedText(20000) })
+    const problems = problemsFor({ stateText: arraysNestedDeep(20000), questionsText: arraysNestedDeep(20000) })
 
     expect(problems).toEqual([
       { field: 'state', message: MESSAGE.stateTooDeep },
@@ -618,8 +618,8 @@ describe('the messages shared with the server', () => {
   })
 
   const CASES: Array<[string, SystemOneDraft, string, string]> = [
-    ['state nesting', validDraft({ stateText: nestedText(33) }), 'state', MESSAGE.stateTooDeep],
-    ['questions nesting', validDraft({ questionsText: nestedText(33) }), 'questions', MESSAGE.questionsTooDeep],
+    ['state nesting', validDraft({ stateText: arraysNestedDeep(33) }), 'state', MESSAGE.stateTooDeep],
+    ['questions nesting', validDraft({ questionsText: arraysNestedDeep(33) }), 'questions', MESSAGE.questionsTooDeep],
     ['question nesting', withQuestion(nested(33)), 'questions.q', MESSAGE.questionTooDeep],
     [
       'instructions nesting',

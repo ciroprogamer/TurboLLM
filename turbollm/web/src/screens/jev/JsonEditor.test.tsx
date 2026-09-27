@@ -2,13 +2,13 @@
 // type, whether the text is valid JSON, and it never traps the keyboard: a Tab must move focus.
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { JsonEditor } from './JsonEditor'
+import { EditorFrame, JsonEditor, JsonEditorBody } from './JsonEditor'
+import { arraysNestedDeep } from './json-test-text'
 
 type EditorProps = Parameters<typeof JsonEditor>[0]
 
 const NEST_TOO_DEEP = 33
 const HUGE_NESTING = 20000
-const arraysNestedDeep = (depth: number) => '['.repeat(depth) + ']'.repeat(depth)
 
 function renderEditor(overrides: Partial<EditorProps> = {}) {
   const onChange = vi.fn()
@@ -89,9 +89,26 @@ describe('JsonEditor', () => {
     expect(textarea).toHaveAttribute('data-gramm', 'false')
   })
 
-  it('does not capture Tab, so focus can always move on', () => {
+  it('inserts an indent at the caret on Tab, instead of moving focus off the editor', () => {
     const { onChange } = renderEditor({ value: '{"a":1}' })
-    const notPrevented = fireEvent.keyDown(screen.getByLabelText('state'), { key: 'Tab' })
+    const textarea = screen.getByLabelText('state') as HTMLTextAreaElement
+    textarea.setSelectionRange(1, 1) // right after the opening brace
+    const notPrevented = fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(notPrevented).toBe(false)
+    expect(onChange).toHaveBeenCalledWith('{  "a":1}')
+  })
+
+  it('replaces a selection with the indent on Tab, like typing over it', () => {
+    const { onChange } = renderEditor({ value: '{"a":1}' })
+    const textarea = screen.getByLabelText('state') as HTMLTextAreaElement
+    textarea.setSelectionRange(1, 4) // the selected '"a"'
+    fireEvent.keyDown(textarea, { key: 'Tab' })
+    expect(onChange).toHaveBeenCalledWith('{  :1}')
+  })
+
+  it('leaves Shift+Tab alone, so focus can still move backward out of the editor', () => {
+    const { onChange } = renderEditor({ value: '{"a":1}' })
+    const notPrevented = fireEvent.keyDown(screen.getByLabelText('state'), { key: 'Tab', shiftKey: true })
     expect(notPrevented).toBe(true)
     expect(onChange).not.toHaveBeenCalled()
   })
@@ -152,6 +169,116 @@ describe('JsonEditor', () => {
     expect(screen.queryByText(caption)).toBeNull()
     rerenderWith({ caption })
     expect(screen.getByText(caption)).toBeInTheDocument()
+  })
+
+  it('formats valid JSON automatically when the editor loses focus, so Format is not the only way', () => {
+    const { onChange } = renderEditor({ value: '{"a":1}' })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": 1\n}')
+  })
+
+  it('does not call onChange on blur when the text is already formatted', () => {
+    const { onChange } = renderEditor({ value: '{\n  "a": 1\n}' })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('leaves invalid JSON alone on blur, in either mode', () => {
+    const { onChange, rerenderWith } = renderEditor({ mode: 'json', value: '{oops' })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+    rerenderWith({ mode: 'json-or-text', value: 'I was charged twice.' })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not reformat on blur a value nested past the limit, the same case Format itself refuses', () => {
+    const { onChange } = renderEditor({ mode: 'json', value: arraysNestedDeep(NEST_TOO_DEEP) })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  // A json-or-text field sends a bare number/boolean/null as the literal STRING typed (stateFromText
+  // keeps text unless it parses to an object, array or string) — reformatting it would silently swap
+  // the sent value from that string to the parsed number. Reported live: '1.50' became '1.5' on blur.
+  it.each(['1.50', 'true', 'null'])(
+    'disables Format, and does not reformat on blur, for the bare literal %s in json-or-text mode',
+    (value) => {
+      const { onChange } = renderEditor({ mode: 'json-or-text', value })
+      expect(formatButton()).toBeDisabled()
+      fireEvent.blur(screen.getByLabelText('state'))
+      expect(onChange).not.toHaveBeenCalled()
+    },
+  )
+
+  it('still formats an object, array or string in json-or-text mode, where the parsed value is what is sent', () => {
+    const { onChange } = renderEditor({ mode: 'json-or-text', value: '{"a":1}' })
+    expect(formatButton()).toBeEnabled()
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": 1\n}')
+  })
+
+  // Reported live: pasting a second question over an unrenamed id, then clicking elsewhere, silently
+  // dropped the first one from the visible text with no chance to notice before it was gone.
+  it('does not reformat a duplicate key away on blur, only on an explicit Format click', () => {
+    const duplicate = '{\n  "a": 1,\n  "a": 2\n}'
+    const { onChange, rerenderWith } = renderEditor({ mode: 'json', value: duplicate })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+    rerenderWith({ value: duplicate })
+    expect(formatButton()).toBeEnabled()
+    fireEvent.click(formatButton())
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": 2\n}')
+  })
+
+  it('does not mistake a string value equal to a key name for a second key', () => {
+    const value = '{"a":"a","b":2}'
+    const { onChange } = renderEditor({ mode: 'json', value })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "a": "a",\n  "b": 2\n}')
+  })
+
+  it('still catches a real duplicate key even when an earlier value is the string form of that key', () => {
+    const value = '{"a":"a","a":1}'
+    const { onChange } = renderEditor({ mode: 'json', value })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('catches a duplicate key hidden behind a different escaping of the same character', () => {
+    const value = '{"a":1,"\\u0061":2}'
+    const { onChange } = renderEditor({ mode: 'json', value })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not mistake the same key name reused in two different objects for a duplicate', () => {
+    const minified = '{"q":{"a":1},"q2":{"a":1}}'
+    const { onChange } = renderEditor({ mode: 'json', value: minified })
+    fireEvent.blur(screen.getByLabelText('state'))
+    expect(onChange).toHaveBeenCalledWith('{\n  "q": {\n    "a": 1\n  },\n  "q2": {\n    "a": 1\n  }\n}')
+  })
+
+  // The questions field keeps one label row across its JSON and form views, so it heads the editor's
+  // body itself rather than letting the editor draw a second one.
+  it('lets a page head the editor with a label row of its own, before the textarea and beside Format', () => {
+    const header = (
+      <>
+        <label htmlFor="questions">questions</label>
+        <button type="button">Switch view</button>
+      </>
+    )
+    render(
+      <EditorFrame header={header}>
+        <JsonEditorBody id="questions" label="questions" value={'{"a":1}'} onChange={vi.fn()} mode="json" />
+      </EditorFrame>,
+    )
+    const toggle = screen.getByRole('button', { name: 'Switch view' })
+    expect(screen.getAllByText('questions', { selector: 'label' })).toHaveLength(1)
+    expect(toggle.parentElement).toContainElement(screen.getByText('questions', { selector: 'label' }))
+    expect(toggle.compareDocumentPosition(screen.getByLabelText('questions')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(formatButton('questions')).toBeEnabled()
+    expect(screen.getByText('Valid JSON')).toBeInTheDocument()
   })
 
   it('shows hostile text as text, never as markup', () => {

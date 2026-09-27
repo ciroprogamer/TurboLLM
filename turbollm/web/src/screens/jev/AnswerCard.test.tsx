@@ -49,6 +49,22 @@ describe('AnswerCard', () => {
     expect(fillWidthOf(card)).toBe('94.5%')
   })
 
+  it('labels every card with its question id, visibly, not only in its accessible name', () => {
+    render(<AnswerCard id="urgent" answer={URGENT} />)
+    expect(screen.getByText('urgent')).toBeInTheDocument()
+  })
+
+  it('tells two yes/no cards apart by their visible ids, when the numbers alone would not', () => {
+    render(
+      <>
+        <AnswerCard id="urgent" answer={URGENT} />
+        <AnswerCard id="angry" answer={URGENT} />
+      </>,
+    )
+    expect(screen.getByText('urgent')).toBeInTheDocument()
+    expect(screen.getByText('angry')).toBeInTheDocument()
+  })
+
   it('shows a choice as the chosen option and its confidence, then every option by probability', () => {
     render(<AnswerCard id="team" answer={TEAM} />)
     const card = screen.getByRole('group', { name: `team ${EM_DASH} choice` })
@@ -117,6 +133,7 @@ describe('AnswerCard', () => {
   it('shows a question id made of markup as text, never as markup', () => {
     const { container } = render(<AnswerCard id="<b>x</b>" answer={URGENT} />)
     expect(screen.getByRole('group', { name: `<b>x</b> ${EM_DASH} noul` })).toBeInTheDocument()
+    expect(screen.getByText('<b>x</b>')).toBeInTheDocument()
     expect(container.querySelector('b')).toBeNull()
   })
 

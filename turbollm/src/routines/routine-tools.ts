@@ -154,7 +154,7 @@ export const CREATE_ROUTINE_TOOL = {
         prompt: { type: 'string', description: 'The task to run, in the same words a user would ask it.' },
         scheduleDisplay: { type: 'string', description: 'Human-readable schedule, e.g. "Runs weekdays at 9:00 AM". Must accurately describe scheduleRule.' },
         scheduleRule: SCHEDULE_RULE_SCHEMA,
-        modelKey: { type: 'string', description: 'One of TurboLLM\'s own model keys — a compound id (e.g. "gemma 4 26b a4b qat|Q4_0|14439362752"), never a generic name like "gpt-4" or "claude". Call list_models first if you don\'t already know a real one; never guess. Never pick a model list_models marks "kind: jev" — it labels text and cannot run a routine.' },
+        modelKey: { type: 'string', description: 'One of TurboLLM\'s own model keys — a compound id (e.g. "gemma 4 26b a4b qat|Q4_0|14439362752"), never a generic name like "gpt-4" or "claude". Call list_models first if you don\'t already know a real one; never guess. Never pick a model list_models marks "kind: jev" or "kind: laya" — those are text classification models and cannot run a routine.' },
         agentId: { type: 'string', description: 'Required when flavor is "chat": an existing Customize -> Agents persona id.' },
         workspacePath: { type: 'string', description: 'Required when flavor is "code": absolute path to the workspace directory.' },
         // Driven off schema.ts's list, not a second hand-maintained copy: this enum is what a MODEL
@@ -186,7 +186,7 @@ export async function execCreateRoutine(
   store: RoutineToolsStore,
   isCodeAuthorized = false,
   modelExists?: (key: string) => boolean,
-  isJevModel?: (key: string) => boolean,
+  isTextClassifier?: (key: string) => boolean,
 ): Promise<string> {
   // Gate BEFORE validation, exactly as POST /api/v1/routines does (routine-routes.ts:152), so an
   // ungated caller learns nothing about the request shape from the error it gets back.
@@ -194,7 +194,7 @@ export async function execCreateRoutine(
   const typeProblem = stringFieldProblem(args)
   if (typeProblem) return `Error: ${typeProblem}`
   const b = args as unknown as RoutineBody
-  const problem = validateCreate(b, modelExists, isJevModel)
+  const problem = validateCreate(b, modelExists, isTextClassifier)
   if (problem) return `Error: ${problem}`
   const routine = store.createRoutine({
     flavor: b.flavor as RoutineFlavor,
@@ -278,7 +278,7 @@ export function execUpdateRoutine(
   args: Record<string, unknown>,
   store: RoutineToolsStore,
   isCodeAuthorized = false,
-  isJevModel?: (key: string) => boolean,
+  isTextClassifier?: (key: string) => boolean,
 ): string {
   const id = String(args.routineId ?? '').trim()
   if (!id) return 'Error: routineId is required.'
@@ -304,7 +304,7 @@ export function execUpdateRoutine(
 
   // The REST layer's own PUT validation, reused verbatim (flavor-dependent invariants re-checked
   // against the STORED flavor, plus permissionMode/codingAgent/scheduleRule) …
-  const problem = validateUpdate(patch, existing, isJevModel)
+  const problem = validateUpdate(patch, existing, isTextClassifier)
   if (problem) return `Error: ${problem}`
   // … plus the two emptiness checks PUT happens not to make. Blanking either field is never a
   // meaningful edit, and an empty modelKey would leave the routine unable to pick an engine at all.

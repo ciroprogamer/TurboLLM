@@ -6,7 +6,7 @@ import {
   CREATE_ROUTINE_TOOL, LIST_ROUTINES_TOOL, UPDATE_ROUTINE_TOOL, DELETE_ROUTINE_TOOL, RUN_ROUTINE_NOW_TOOL,
   type RoutineToolsStore,
 } from './routine-tools'
-import { CODE_GATE_MESSAGE, JEV_ROUTINE_MODEL_MESSAGE } from './routine-routes'
+import { CODE_GATE_MESSAGE, TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE } from './routine-routes'
 
 function freshStore(): ConversationStore {
   return new ConversationStore(IN_MEMORY_DATA_DIR)
@@ -806,11 +806,12 @@ test('update_routine and delete_routine require routineId', () => {
 })
 
 // The tool that asks a model to pick a modelKey must steer it away from the models
-// list_models marks as Jev.
-test('the create_routine modelKey description warns off Jev models', () => {
+// list_models marks as text classification models (kind: jev or kind: laya).
+test('the create_routine modelKey description warns off text classification models', () => {
   const modelKey = (CREATE_ROUTINE_TOOL.function.parameters.properties as Record<string, { description: string }>).modelKey
 
   assert.match(modelKey.description, /kind: jev/)
+  assert.match(modelKey.description, /kind: laya/)
   assert.match(modelKey.description, /cannot run a routine/)
 })
 
@@ -829,7 +830,7 @@ test('execCreateRoutine: a Jev modelKey is refused and nothing is stored', async
     scheduleRule: { kind: 'daily', hour: 9, minute: 0 }, modelKey: JEV_TOOL_KEY, agentId: 'agent-1',
   }, store, false, undefined, isJev)
 
-  assert.equal(msg, `Error: ${JEV_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
+  assert.equal(msg, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
   assert.equal(store.listRoutines().length, 0)
 })
 
@@ -851,7 +852,7 @@ test('execUpdateRoutine: switching a routine to a Jev model is refused, even wit
 
   const msg = execUpdateRoutine({ routineId: created.id, modelKey: JEV_TOOL_KEY, confirm: true }, store, false, isJev)
 
-  assert.equal(msg, `Error: ${JEV_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
+  assert.equal(msg, `Error: ${TEXT_CLASSIFIER_ROUTINE_MODEL_MESSAGE(JEV_TOOL_KEY)}`)
   assert.equal(store.getRoutine(created.id)?.modelKey, 'm')
 })
 

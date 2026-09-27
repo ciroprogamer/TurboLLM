@@ -159,9 +159,9 @@ describe('HfRepoDialog — a repo with exactly one checkpoint', () => {
     expect(await screen.findByText(/9\.0 GB total/)).toBeTruthy()
   })
 
-  it('marks it as a Jev model', async () => {
+  it('marks it as a text classification model', async () => {
     renderContent(repoDetail({ checkpoints: [ROOT_CHECKPOINT] }))
-    expect(await screen.findByText('Jev model')).toBeTruthy()
+    expect(await screen.findByText('Text classification')).toBeTruthy()
     expect(screen.queryByText('Not verified')).toBeNull()
   })
 
@@ -174,7 +174,7 @@ describe('HfRepoDialog — a repo with exactly one checkpoint', () => {
   it('says nothing about Jev for a plain safetensors checkpoint', async () => {
     renderContent(repoDetail({ checkpoints: [{ ...ROOT_CHECKPOINT, jev: null }] }))
     await screen.findByRole('button', { name: /download model/i })
-    expect(screen.queryByText('Jev model')).toBeNull()
+    expect(screen.queryByText('Text classification')).toBeNull()
   })
 })
 
@@ -192,10 +192,10 @@ describe('HfRepoDialog — a Laya repo (nested layout, no checkpoints list)', ()
     return repoDetail({ repo: 'convaiinnovations/laya', files: LAYA_FILES, laya: true, checkpoints: undefined, ...over })
   }
 
-  it('describes itself as a Laya decision model and offers a Laya-labeled button', async () => {
+  it('describes itself as a text classification model on the Laya engine and offers a Laya-labeled button', async () => {
     renderContent(layaDetail())
     expect(await screen.findByText(
-      'Laya decision model — runs on the Laya engine (any OS, CPU or GPU). Downloads the English and multilingual checkpoints as one folder.',
+      'Text classification model — runs on the Laya engine (any OS, CPU or GPU). Downloads the English and multilingual checkpoints as one folder.',
     )).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Download Laya model' })).toBeTruthy()
   })

@@ -88,3 +88,26 @@ describe('workspace-nav and the Jev Playground', () => {
     expect(resolveNavTarget('/workspace')).toBe('/workspace/chat')
   })
 })
+
+// ADR-444 moved the playground to /workspace/text-classification; the Jev path above stays filtered because an
+// older build stored it and a bookmark still reaches it.
+describe('workspace-nav and the text classification playground', () => {
+  beforeEach(() => { sessionStorage.clear() })
+
+  it('keeps the session the user left when the playground takes over', () => {
+    rememberWorkspacePath('/workspace/code/abc123')
+    rememberWorkspacePath('/workspace/text-classification')
+    expect(getLastWorkspacePath()).toBe('/workspace/code/abc123')
+  })
+
+  it('ignores a playground sub-route too', () => {
+    rememberWorkspacePath('/workspace/chat/xyz789')
+    rememberWorkspacePath('/workspace/text-classification/anything')
+    expect(getLastWorkspacePath()).toBe('/workspace/chat/xyz789')
+  })
+
+  it('treats a playground path already in storage as absent', () => {
+    sessionStorage.setItem('tllm.workspace.lastPath', '/workspace/text-classification')
+    expect(getLastWorkspacePath()).toBe('/workspace/chat')
+  })
+})

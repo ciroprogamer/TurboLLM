@@ -1,0 +1,77 @@
+// The library's text classification models, in the playground's own left column (ADR-444, amended 2026-09-25). It
+// only shows and offers: what a Load or an Eject really does is the playground's switch and eject, the same path the
+// Switch model menu takes.
+import { Button } from '../../components/ui/button'
+import { TextClassificationRuntimeLabel } from '../../components/TextClassificationRuntimeLabel'
+import { isSystemOneModel } from '../../lib/model-kind'
+import type { LoadedJev, ModelEntry } from '../../lib/types'
+import { canLoadNow } from './SwitchModelMenu'
+
+const TITLE = 'Text classification models'
+
+type ModelActions = {
+  onLoad: (m: ModelEntry) => void
+  onEject: (m: ModelEntry) => void
+}
+
+export function TextClassificationModelList({
+  models,
+  current,
+  pendingKey,
+  ...actions
+}: {
+  models: ModelEntry[]
+  current: LoadedJev | null
+  pendingKey: string | undefined
+} & ModelActions) {
+  return (
+    <section aria-label={TITLE} className="flex min-h-0 flex-col gap-1 overflow-y-auto px-2 py-3">
+      <h2 className="px-2 text-[11px] font-medium uppercase tracking-wide text-faint">{TITLE}</h2>
+      {models.filter(isSystemOneModel).map((m) => (
+        <ModelRow key={m.key} model={m} loaded={isLoaded(m, current)} loading={m.key === pendingKey} {...actions} />
+      ))}
+    </section>
+  )
+}
+
+/** The playground's model, or one the library reports loaded — a Laya model can run beside the Jev model the
+ *  playground shows. */
+function isLoaded(m: ModelEntry, current: LoadedJev | null): boolean {
+  return m.loaded || m.key === current?.key
+}
+
+function ModelRow({
+  model,
+  loaded,
+  loading,
+  onLoad,
+  onEject,
+}: { model: ModelEntry; loaded: boolean; loading: boolean } & ModelActions) {
+  const loadable = canLoadNow(model)
+  return (
+    <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-[13px] text-ink">{model.name}</span>
+        <TextClassificationRuntimeLabel model={model} />
+        {!loaded && !loadable && model.incompatibleReason && (
+          <span className="text-[11px] text-faint">{model.incompatibleReason}</span>
+        )}
+      </div>
+      {loaded ? (
+        <Button variant="outline" size="sm" aria-label={`Eject ${model.name}`} onClick={() => onEject(model)}>
+          Eject
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Load ${model.name}`}
+          disabled={loading || !loadable}
+          onClick={() => onLoad(model)}
+        >
+          {loading ? 'Loading…' : 'Load'}
+        </Button>
+      )}
+    </div>
+  )
+}

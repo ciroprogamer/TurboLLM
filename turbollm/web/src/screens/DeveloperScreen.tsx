@@ -45,9 +45,9 @@ const PUBLIC_APIS = [
   { method: 'POST', path: '/v1/chat/completions', desc: 'OpenAI Chat Completions' },
   { method: 'POST', path: '/v1/messages', desc: 'Anthropic Messages' },
   { method: 'POST', path: '/v1/embeddings', desc: 'OpenAI Embeddings' },
-  { method: 'POST', path: '/v1/systemone', desc: 'Jev: answer questions about content' },
-  { method: 'POST', path: '/v1/classify', desc: 'Jev: label premise/hypothesis pairs' },
-  { method: 'POST', path: '/v1/rerank', desc: 'Jev: rerank documents' },
+  { method: 'POST', path: '/v1/systemone', desc: 'Text classification (Jev or Laya): answer questions about content' },
+  { method: 'POST', path: '/v1/classify', desc: 'Jev only (NLI on vLLM): label premise/hypothesis pairs' },
+  { method: 'POST', path: '/v1/rerank', desc: 'Jev only (NLI on vLLM): rerank documents' },
   { method: 'GET', path: '/v1/models', desc: 'Models list' },
 ] as const
 

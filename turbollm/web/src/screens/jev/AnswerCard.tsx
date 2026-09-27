@@ -21,6 +21,9 @@ export function AnswerCard({ id, answer, laya = false }: { id: string; answer: A
       aria-label={`${id} — ${typeOf(answer)}`}
       className="flex min-w-0 flex-col gap-2 rounded-md border border-border p-3 [overflow-wrap:anywhere]"
     >
+      {/* The accessible name above already says "id — type"; a card otherwise has no visible mark of
+       *  which question it answers, so two yes/no questions read identically at a glance (reported live). */}
+      <p className="text-[12px] font-medium text-muted">{id}</p>
       <AnswerBody answer={answer} laya={laya} />
     </div>
   )

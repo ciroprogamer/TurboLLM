@@ -121,7 +121,7 @@ function ShadowedNote({ ancestorName }: { ancestorName: string }) {
 function CheckpointTags({ checkpoint }: { checkpoint: HfCheckpoint }) {
   return (
     <>
-      {checkpoint.jev && <Badge variant="accent">Jev model</Badge>}
+      {checkpoint.jev && <Badge variant="accent">Text classification</Badge>}
       {checkpoint.jev && !checkpoint.jev.verified && <Badge>Not verified</Badge>}
       {checkpoint.downloaded && <Badge>Downloaded</Badge>}
     </>

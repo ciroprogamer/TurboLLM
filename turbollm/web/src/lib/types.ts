@@ -228,6 +228,9 @@ export type Status = {
   /** The loaded Laya model, or null (ADR-443). It keeps the System One playground open but, unlike a Jev
    *  model, never takes the Workspace over. Absent from an older daemon and over Turbo Link. */
   laya?: LayaStatus | null
+  /** The alive text classification model, whichever runtime serves it, or null (ADR-444). The Jev one wins when
+   *  both are alive. Absent from an older daemon and over Turbo Link: read `jev`, `laya` and the catalog then. */
+  textClassification?: TextClassificationStatus | null
   telemetryLevel: string
   uptimeSec: number
   /** Locally-enabled feature flags (TURBOLLM_FEATURES env var) — internal/dev only,
@@ -708,6 +711,23 @@ export type LayaStatus = {
   state: 'starting' | 'running' | 'stopping'
 }
 
+/** The engine a text classification model runs on (ADR-444): vLLM for a Jev model, the Laya engine for a Laya
+ *  one. Twin of `TextClassifierRuntime` in src/models/text-classifier.ts. */
+export type TextClassificationRuntime = 'vllm' | 'laya'
+
+/** Jev and Laya as one feature on /api/v1/status (ADR-444); twin of src/api/text-classification-status.ts.
+ *  `runtime: 'vllm'` is a Jev model, which takes the Workspace over; `'laya'` never does. `labels` comes with a
+ *  Jev model, `checkpoints` with a Laya one. */
+export type TextClassificationStatus = {
+  key: string
+  name: string
+  runtime: TextClassificationRuntime
+  state: 'starting' | 'running' | 'stopping'
+  slot: 'primary' | 'pool'
+  labels?: JevLabel[]
+  checkpoints?: string[]
+}
+
 export type ClassifyRequest = {
   model: string
   premise: string
@@ -996,11 +1016,15 @@ export type HfSearchItem = {
   gated: boolean
   tags: string[]
   localCount: number
+  /** Only on a Text classification category row: the engine the repo loads on (ADR-444). */
+  textClassification?: { runtime: TextClassificationRuntime }
 }
 
-export type HfSearchResult = {
-  results: HfSearchItem[]
-}
+export type HfSearchRows = { results: HfSearchItem[] }
+
+/** Discover's "Text classification" category (ADR-444): the Laya bundles and verified Jev (NLI)
+ *  models TurboLLM can run, whichever engine is active. */
+export type HfSearchCategory = 'text-classification'
 
 /** Mirrors src/hf/hf.ts HfSortOption. 'best-match' is HF's own relevance ranking for a
  *  text query (meaningless when browsing with no query — the daemon falls back to

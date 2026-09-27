@@ -23,13 +23,13 @@ interface AliveJevModel {
 /** The alive Jev model: the primary's if it is one, else the most-recently-used pool slot's.
  *  'stopping' counts as alive so a Jev→Jev switch (stop A, start B) doesn't flicker Workspace
  *  back to Chat for one poll. */
-export function jevStatus(d: Deps): JevStatus | null {
+export function jevStatus(d: Pick<Deps, 'modelRouter' | 'scanner'>): JevStatus | null {
   const alive = aliveJevModels(d)
   const chosen = alive.find((m) => m.slot.primary) ?? mostRecentlyUsed(alive)
   return chosen ? toJevStatus(chosen) : null
 }
 
-function aliveJevModels(d: Deps): AliveJevModel[] {
+function aliveJevModels(d: Pick<Deps, 'modelRouter' | 'scanner'>): AliveJevModel[] {
   return d.modelRouter.aliveSlots().flatMap((slot) => {
     const entry = d.scanner.get(slot.modelKey)
     return entry?.jev ? [{ slot, entry, jev: entry.jev }] : []

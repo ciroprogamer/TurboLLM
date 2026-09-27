@@ -5,7 +5,8 @@
 // root's `tsx --test`. New web tests are Vitest, so they go in their own file rather than
 // dragging vram.test.ts across runners.
 import { describe, expect, test } from 'vitest'
-import { fitBudgetMb, repoFitsHardware, repoFitVerdict, repoParamsB } from './vram'
+import type { HfSearchItem } from './types'
+import { fitBudgetMb, repoFitsHardware, repoFitVerdict, repoParamsB, searchRowFitsHardware } from './vram'
 
 describe('repoParamsB', () => {
   test('reads the usual GGUF repo names', () => {
@@ -120,5 +121,33 @@ describe('repoFitsHardware', () => {
 
   test('still hides a named model that is genuinely too big', () => {
     expect(repoFitsHardware('unsloth/Qwen3.6-35B-A3B-GGUF', phone)).toBe(false)
+  })
+})
+
+describe('searchRowFitsHardware', () => {
+  const phone = fitBudgetMb({ os: 'android/arm64', ramMB: 7655, gpus: [] })
+
+  function row(repo: string, textClassification?: HfSearchItem['textClassification']): HfSearchItem {
+    return { repo, downloads: 0, likes: 0, updatedAt: '', gated: false, tags: [], localCount: 0, textClassification }
+  }
+
+  // ADR-444: classifier repo names carry no "<N>B" token, so the name rule (ADR-402) would hide
+  // the whole Text classification category the moment the filter is on.
+  test.each([
+    ['convaiinnovations/laya', 'laya'],
+    ['AlexWortega/openjev', 'vllm'],
+  ] as const)('never hides the text-classification row %s', (repo, runtime) => {
+    expect(repoFitsHardware(repo, phone)).toBe(false)
+    expect(searchRowFitsHardware(row(repo, { runtime }), phone)).toBe(true)
+  })
+
+  test('does not judge a text-classification row by a size its name does state', () => {
+    expect(searchRowFitsHardware(row('someone/Qwen3.5-27B-NLI', { runtime: 'vllm' }), phone)).toBe(true)
+  })
+
+  test('judges every other row by its name, as repoFitsHardware does', () => {
+    expect(searchRowFitsHardware(row('unsloth/GLM-5.3-Flash-GGUF'), phone)).toBe(false)
+    expect(searchRowFitsHardware(row('unsloth/Qwen3.6-35B-A3B-GGUF'), phone)).toBe(false)
+    expect(searchRowFitsHardware(row('unsloth/Llama-3.2-1B-Instruct-GGUF'), phone)).toBe(true)
   })
 })

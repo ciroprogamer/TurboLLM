@@ -102,14 +102,34 @@ describe('ModelsScreen — Jev models', () => {
     renderScreen()
     expect(screen.getByText('qwen3.5-4b-nli-v2')).toBeTruthy()
     expect(screen.getByText('Needs vLLM (Linux or WSL2)')).toBeTruthy()
-    expect(screen.getByText('Jev')).toBeTruthy()
   })
 
-  it('badges a Laya model the same way a Jev model is badged', () => {
+  // ADR-444: one name for both, and a quieter label for the runtime that still differs.
+  it('badges a Jev model as text classification on vLLM', () => {
+    state.models = [jevEntry()]
+    renderScreen()
+    expect(screen.getByText('Text classification')).toBeTruthy()
+    expect(screen.getByText('vLLM')).toBeTruthy()
+    expect(screen.queryByText('Jev')).toBeNull()
+  })
+
+  it('badges a Laya model as text classification on the Laya engine', () => {
     state.models = [layaEntry()]
     renderScreen()
     expect(screen.getByText('laya')).toBeTruthy()
-    expect(screen.getByText('Laya')).toBeTruthy()
+    expect(screen.getByText('Text classification')).toBeTruthy()
+    expect(screen.getByText('Laya engine')).toBeTruthy()
+    expect(screen.queryByText('Laya')).toBeNull()
+  })
+
+  it('keeps a Laya model out of the hidden-model banner, as it does a Jev model', () => {
+    state.models = [
+      layaEntry({ compatibleWithActiveEngine: false }),
+      entry({ key: 'mlx-1', name: 'Mistral MLX', format: 'mlx', compatibleWithActiveEngine: false }),
+    ]
+    renderScreen()
+    expect(screen.getByText("1 model is hidden — the active engine can't load it.")).toBeTruthy()
+    expect(screen.getByText('laya')).toBeTruthy()
   })
 
   it('shows a Laya model as loading, not running, while its engine prepares', () => {
@@ -181,6 +201,14 @@ describe('ModelsScreen — Jev models', () => {
     state.models = [jevEntry({ compatibleWithActiveEngine: false, incompatibleReason: 'Needs vLLM (Linux or WSL2)' })]
     renderScreen()
     expect(screen.getByRole('button', { name: 'Load' }).getAttribute('title')).toBe('Needs vLLM (Linux or WSL2)')
+  })
+
+  // A Laya model never loads on the active engine, so "switch to" would send the user the wrong way.
+  it('tells a Laya model with no Laya engine to install one', () => {
+    state.models = [layaEntry({ compatibleWithActiveEngine: false, incompatibleReason: 'Needs the Laya engine' })]
+    renderScreen()
+    expect(screen.getByRole('button', { name: 'Load' }).getAttribute('title'))
+      .toBe('Install the Laya engine (Engines) to load this model.')
   })
 
   it('never labels a Jev model "no chat template" — it never chats', () => {

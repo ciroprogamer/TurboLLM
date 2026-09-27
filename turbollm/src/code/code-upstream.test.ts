@@ -115,7 +115,7 @@ test('a Jev model as the local primary fails the Code turn with the jev_model_lo
     assert.ok(e instanceof Error)
     assert.equal(
       e.message,
-      'A Jev model is loaded — it labels text and cannot chat. Switch to a chat model, or use the Jev Playground.',
+      'A text classification model is loaded — it cannot chat. Switch to a chat model, or use the text classification playground.',
     )
     assert.notEqual(e.message, 'model_not_loaded')
     return true

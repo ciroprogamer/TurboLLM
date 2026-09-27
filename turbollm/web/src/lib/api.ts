@@ -21,7 +21,8 @@ import type {
   HwUsage,
   UpdatePolicy,
   HfRepoDetail,
-  HfSearchResult,
+  HfSearchCategory,
+  HfSearchRows,
   HfSortOption,
   HfTokenTest,
   LoadProfile,
@@ -1077,9 +1078,15 @@ export function getSysInfo(): Promise<SysInfo> {
 // ── Hugging Face discovery (spec 10 §2–4, §7 rewrite) ────────────────────────
 /** Search (q set) or browse (q blank) HF repos, sorted by `sort`. Each row carries
  *  `localCount` (variants already in library). The library/format filter adapts to the
- *  active engine server-side — never hardcoded to GGUF. */
-export function hfSearch(q: string, sort: HfSortOption = 'best-match'): Promise<HfSearchResult> {
-  return request<HfSearchResult>(`/api/v1/hf/search?q=${encodeURIComponent(q)}&sort=${sort}`)
+ *  active engine server-side — never hardcoded to GGUF — unless `category` asks for a
+ *  category, which ignores the engine. */
+export function hfSearch(
+  q: string,
+  sort: HfSortOption = 'best-match',
+  category?: HfSearchCategory,
+): Promise<HfSearchRows> {
+  const categoryParam = category ? `&category=${category}` : ''
+  return request<HfSearchRows>(`/api/v1/hf/search?q=${encodeURIComponent(q)}&sort=${sort}${categoryParam}`)
 }
 
 /** Repo detail (files + sizes + gated). `repo` is "owner/name" — the slash is part

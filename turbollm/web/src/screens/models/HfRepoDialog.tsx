@@ -670,7 +670,7 @@ function CheckpointTags({ checkpoint }: { checkpoint: HfCheckpoint }) {
   if (!checkpoint.jev) return null
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2">
-      <Badge variant="accent">Jev model</Badge>
+      <Badge variant="accent">Text classification</Badge>
       {!checkpoint.jev.verified && <Badge>Not verified</Badge>}
     </div>
   )
@@ -708,7 +708,7 @@ function MlxRepoBody({
   // Laya (huggingface.co/convaiinnovations/laya) always loads on its own 'laya' engine, never
   // whatever engine is currently active — so this branch is checked before `engineKind` at all.
   const description = detail.laya
-    ? 'Laya decision model — runs on the Laya engine (any OS, CPU or GPU). Downloads the English and multilingual checkpoints as one folder.'
+    ? 'Text classification model — runs on the Laya engine (any OS, CPU or GPU). Downloads the English and multilingual checkpoints as one folder.'
     : isMlxFamily
       ? 'MLX model — runs on Apple Silicon via MLX. Downloads as a directory of safetensors weights.'
       : engineKind === 'vllm'

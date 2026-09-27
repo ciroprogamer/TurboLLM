@@ -21,7 +21,8 @@ import type { LoadedJev, ModelEntry, Status } from '../../lib/types'
 import { useIsDesktop } from '../../lib/useIsDesktop'
 import { AnswerList } from './AnswerList'
 import { JevHeader } from './JevHeader'
-import { JsonEditor } from './JsonEditor'
+import { JsonEditor, selectCls } from './JsonEditor'
+import { QuestionsField } from './QuestionsField'
 import { ResponsePanel, type SystemOneRun } from './ResponsePanel'
 import { SwitchModelMenu, ejectModel, switchToModel } from './SwitchModelMenu'
 import { TextClassificationModelList } from './TextClassificationModelList'
@@ -52,6 +53,9 @@ export function JevPlaygroundScreen() {
   const [running, setRunning] = useState(false)
   const [exampleId, setExampleId] = useState(SYSTEMONE_EXAMPLES[0].id)
   const [switchOpen, setSwitchOpen] = useState(false)
+  // False while the questions form shows a question or an option the text cannot hold (a repeated id
+  // or option name): the run would ask less than the cards show.
+  const [questionsFormValid, setQuestionsFormValid] = useState(true)
 
   useEffect(() => {
     const pendingSave = setTimeout(() => saveDraft(draft), DRAFT_SAVE_DELAY_MS)
@@ -65,7 +69,7 @@ export function JevPlaygroundScreen() {
   const currentRun = useRef(0)
 
   async function runDraft(key: string) {
-    if (inFlight.current) return
+    if (inFlight.current || !questionsFormValid) return
     const drafted = draftRequest(key, draft)
     if (!drafted.ok) return
     const asked = ++currentRun.current
@@ -173,13 +177,11 @@ export function JevPlaygroundScreen() {
               onChange={(next) => setDraft((d) => ({ ...d, stateText: next }))}
               problem={problems.find(isStateProblem)?.message}
             />
-            <JsonEditor
-              id="jev-questions"
-              label="questions"
-              mode="json"
+            <QuestionsField
               value={draft.questionsText}
               onChange={(next) => setDraft((d) => ({ ...d, questionsText: next }))}
               problem={problems.find(isQuestionsProblem)?.message}
+              onFormValidityChange={setQuestionsFormValid}
             />
             {problems.filter(isRequestProblem).map((problem) => (
               <p key={problem.field} role="alert" className="text-[13px] text-err">
@@ -190,7 +192,7 @@ export function JevPlaygroundScreen() {
               <Button
                 type="button"
                 aria-keyshortcuts="Meta+Enter Control+Enter"
-                disabled={running || problems.length > 0 || jev.state !== 'running'}
+                disabled={running || problems.length > 0 || !questionsFormValid || jev.state !== 'running'}
                 onClick={() => latestRun.current()}
               >
                 {running ? 'Running…' : 'Run'}
@@ -200,7 +202,7 @@ export function JevPlaygroundScreen() {
                 aria-label="Example"
                 value={exampleId}
                 onChange={(e) => pickExample(e.target.value)}
-                className="max-w-[210px] rounded-md border border-border bg-bg px-2 py-1 text-[13px] text-ink"
+                className={selectCls}
               >
                 {SYSTEMONE_EXAMPLES.map((example) => (
                   <option key={example.id} value={example.id}>{example.label}</option>

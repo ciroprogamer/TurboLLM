@@ -2,9 +2,10 @@
 // There is no editor library on purpose (nothing new is added to the web app). Tab indents instead
 // of moving focus, the usual code-editor convention; Shift+Tab is left alone as the escape hatch, so
 // the control is never a full keyboard trap.
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Button } from '../../components/ui/button'
-import { jsonDepth, MAX_NESTING_DEPTH } from '../../lib/systemone-types'
+import { cn } from '../../lib/utils'
+import { isTooDeep } from './systemone-draft'
 
 interface JsonEditorProps {
   id: string
@@ -15,6 +16,13 @@ interface JsonEditorProps {
   problem?: string
   caption?: string
 }
+
+/** The look the request's fields share, so the questions form and the Example picker beside these
+ *  editors read as one page. */
+export const labelCls = 'text-[12px] font-medium text-muted'
+export const selectCls = 'max-w-[210px] rounded-md border border-border bg-bg px-2 py-1 text-[13px] text-ink'
+export const textareaCls =
+  'w-full resize-y rounded-md border border-border bg-bg px-3 py-2 text-[12px] leading-relaxed text-ink outline-none focus:border-accent placeholder:text-faint'
 
 type Inspection =
   | { valid: true; value: unknown; formattable: boolean }
@@ -27,7 +35,32 @@ const PLAIN_TEXT_STATUS = 'Plain text – sent as a string.'
 
 const TAB_INDENT = '  '
 
-export function JsonEditor({ id, label, value, onChange, mode, problem, caption }: JsonEditorProps) {
+export function JsonEditor(props: JsonEditorProps) {
+  const header = (
+    <label htmlFor={props.id} className={labelCls}>
+      {props.label}
+    </label>
+  )
+  return (
+    <EditorFrame header={header}>
+      <JsonEditorBody {...props} />
+    </EditorFrame>
+  )
+}
+
+/** An editor's grid: the header row on top, which a page may fill with more than the label, such as a
+ *  toggle to another view of the same text; Format beside it, and the body below. */
+export function EditorFrame({ header, children }: { header: ReactNode; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5">
+      <div className="col-start-1 row-start-1 flex flex-wrap items-center gap-2">{header}</div>
+      {children}
+    </div>
+  )
+}
+
+/** Everything of the editor but its header row, for an `EditorFrame` whose header the page draws. */
+export function JsonEditorBody({ id, label, value, onChange, mode, problem, caption }: JsonEditorProps) {
   const inspection = useMemo(() => inspectJson(value), [value])
   const status = describeStatus(mode, value, inspection)
   const canFormat = inspection.valid && inspection.formattable
@@ -72,14 +105,11 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
   }
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5">
-      <label htmlFor={id} className="col-start-1 row-start-1 text-[12px] font-medium text-muted">
-        {label}
-      </label>
+    <>
       <textarea
         id={id}
         ref={textareaRef}
-        className="col-span-2 row-start-2 min-h-[140px] w-full resize-y rounded-md border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-accent placeholder:text-faint"
+        className={cn(textareaCls, 'col-span-2 row-start-2 min-h-[140px] font-mono')}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
@@ -110,7 +140,7 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
           {shownProblem}
         </p>
       )}
-    </div>
+    </>
   )
 }
 
@@ -119,7 +149,7 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
 function inspectJson(text: string): Inspection {
   try {
     const value: unknown = JSON.parse(text)
-    return { valid: true, value, formattable: jsonDepth(value, MAX_NESTING_DEPTH) <= MAX_NESTING_DEPTH }
+    return { valid: true, value, formattable: !isTooDeep(value) }
   } catch (error) {
     return { valid: false, error: error instanceof Error ? error.message : String(error) }
   }

@@ -667,6 +667,146 @@ describe('JevPlaygroundScreen picking an example', () => {
   })
 })
 
+// Asked for live: JSON alone is hard to write by hand. The form is a second view of the same questions
+// text, so the draft, its problems and the run are the same whichever view is showing.
+describe('JevPlaygroundScreen editing the questions as a form', () => {
+  const viewToggle = () => screen.getByRole('group', { name: 'Questions input' })
+  const viewButton = (name: 'JSON' | 'Form') => within(viewToggle()).getByRole('button', { name })
+  const questionCards = () => screen.getAllByRole('group', { name: /^Question \d+$/ })
+  const cardIds = () => questionCards().map((card) => (within(card).getByLabelText('id') as HTMLInputElement).value)
+  const questionsTextarea = () => screen.queryByRole('textbox', { name: 'questions' })
+
+  it('offers JSON and Form in the questions label row, with JSON on', () => {
+    renderScreen()
+    expect(viewButton('JSON')).toHaveAttribute('aria-pressed', 'true')
+    expect(viewButton('Form')).toHaveAttribute('aria-pressed', 'false')
+    expect(viewToggle().parentElement).toContainElement(screen.getByText('questions', { selector: 'label' }))
+    expect(questionsTextarea()).toHaveValue(FIRST_EXAMPLE.questionsText)
+  })
+
+  it('shows the questions as a form, under the same label row, in place of the textarea once Form is picked', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+
+    expect(viewButton('Form')).toHaveAttribute('aria-pressed', 'true')
+    expect(viewToggle().parentElement).toHaveTextContent(/^questions/)
+    expect(questionsTextarea()).toBeNull()
+    expect(cardIds()).toEqual(['urgent', 'team', 'mood'])
+    expect(within(questionCards()[0]).getByLabelText('type')).toHaveDisplayValue('Yes/no')
+    expect(screen.getByLabelText('state')).toHaveValue(FIRST_EXAMPLE.stateText)
+  })
+
+  it('keeps every keystroke typed into a form field, in the field that has the focus', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+    const id = within(questionCards()[0]).getByLabelText('id')
+    await userEvent.type(id, '-now')
+
+    expect(within(questionCards()[0]).getByLabelText('id')).toBe(id)
+    expect(id).toHaveValue('urgent-now')
+    expect(document.activeElement).toBe(id)
+  })
+
+  it.each([
+    ['Form', 'JSON'],
+    ['JSON', 'Form'],
+  ] as const)('keeps the focus on the %s button it was pressed from the keyboard on', async (pressed, first) => {
+    renderScreen()
+    if (first === 'Form') await userEvent.click(viewButton('Form'))
+    viewButton(pressed).focus()
+    await userEvent.keyboard(' ')
+    expect(viewButton(pressed)).toHaveAttribute('aria-pressed', 'true')
+    expect(document.activeElement).toBe(viewButton(pressed))
+  })
+
+  it('shows an edit made in the form in the JSON view', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+    fireEvent.change(within(questionCards()[0]).getByLabelText('id'), { target: { value: 'urgency' } })
+    await userEvent.click(viewButton('JSON'))
+
+    const questions = JSON.parse((questionsTextarea() as HTMLTextAreaElement).value)
+    expect(Object.keys(questions)).toEqual(['urgency', 'team', 'mood'])
+  })
+
+  it('shows a rule problem under the form and will not run it, then runs the questions as the form has them', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+    const instructions = within(questionCards()[0]).getByLabelText('instructions')
+
+    fireEvent.change(instructions, { target: { value: '' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('questions.urgent.instructions must be 1 to 4000 characters.')
+    expect(runButton()).toBeDisabled()
+
+    fireEvent.change(instructions, { target: { value: 'Is this urgent?' } })
+    await userEvent.click(runButton())
+    await waitFor(() => expect(h.systemone).toHaveBeenCalledTimes(1))
+    expect(h.systemone.mock.calls[0][0].questions.urgent).toEqual({ type: 'noul', instructions: 'Is this urgent?' })
+  })
+
+  // The text holds one question per id and one option per name: a repeat would run less than the cards
+  // show, and the rules alone would let it run.
+  it('will not run while two questions share an id, by button or shortcut, and runs once they do not', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+    const secondId = () => within(questionCards()[1]).getByLabelText('id')
+
+    fireEvent.change(secondId(), { target: { value: 'urgent' } })
+    expect(runButton()).toBeDisabled()
+    pressRunShortcut()
+    await tick()
+    expect(h.systemone).not.toHaveBeenCalled()
+
+    fireEvent.change(secondId(), { target: { value: 'team' } })
+    expect(runButton()).toBeEnabled()
+  })
+
+  it('will not run while two options of a pick-one question share a name', () => {
+    renderScreen()
+    fireEvent.click(viewButton('Form'))
+    fireEvent.change(within(questionCards()[1]).getByLabelText('Name of option 2 of team'), { target: { value: 'billing' } })
+    expect(within(questionCards()[1]).getByRole('alert')).toHaveTextContent('Each option needs a name of its own.')
+    expect(runButton()).toBeDisabled()
+  })
+
+  it('runs the text the JSON view shows once the form with a repeated id is gone', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+    fireEvent.change(within(questionCards()[1]).getByLabelText('id'), { target: { value: 'urgent' } })
+    await userEvent.click(viewButton('JSON'))
+    expect(runButton()).toBeEnabled()
+  })
+
+  it('rebuilds the form from an example picked while it is showing', async () => {
+    renderScreen()
+    await userEvent.click(viewButton('Form'))
+    await userEvent.selectOptions(picker(), 'routing')
+
+    expect(viewButton('Form')).toHaveAttribute('aria-pressed', 'true')
+    expect(cardIds()).toEqual(['team'])
+  })
+
+  it.each([
+    ['text that is not JSON', '{oops'],
+    ['JSON that is not an object', '[{"type":"noul"}]'],
+  ])('does not offer the form for %s, and says why', (_kind, questionsText) => {
+    renderScreen()
+    editText('questions', questionsText)
+    expect(viewButton('Form')).toBeDisabled()
+    expect(viewButton('Form')).toHaveAttribute('title', 'Fix the JSON to use the form')
+
+    editText('questions', '{}')
+    expect(viewButton('Form')).toBeEnabled()
+  })
+
+  it('does not offer the form for a stored draft whose questions are not JSON', () => {
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ stateText: 'S', questionsText: '{oops' }))
+    renderScreen()
+    expect(questionsTextarea()).toHaveValue('{oops')
+    expect(viewButton('Form')).toBeDisabled()
+  })
+})
+
 describe('JevPlaygroundScreen remembering the draft', () => {
   beforeEach(() => {
     vi.useFakeTimers()

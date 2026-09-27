@@ -105,7 +105,9 @@ function checkQuestions(questions: unknown): DraftProblem | undefined {
   return checkQuestionsRules(questions)
 }
 
-function firstTooDeepQuestionsField(questions: unknown): string | undefined {
+/** The path of the first field nested past the limit, counted per field of each question as the server
+ *  counts it, or undefined when there is none. */
+export function firstTooDeepQuestionsField(questions: unknown): string | undefined {
   if (!isObject(questions)) return isTooDeep(questions) ? 'questions' : undefined
   return firstFound(Object.entries(questions), ([id, question]) => firstTooDeepQuestionField(`questions.${id}`, question))
 }
@@ -229,7 +231,7 @@ const CRITERIA_RULES: Record<Question['type'], CriteriaRule> = {
   score: checkScoreCriteria,
 }
 
-const isQuestionType = (value: unknown): value is Question['type'] =>
+export const isQuestionType = (value: unknown): value is Question['type'] =>
   typeof value === 'string' && Object.hasOwn(CRITERIA_RULES, value)
 
 const problem = (field: string, message: string): DraftProblem => ({ field, message })
@@ -248,11 +250,11 @@ function firstFound<Item, Found>(items: Iterable<Item>, look: (item: Item) => Fo
   return undefined
 }
 
-const isTooDeep = (value: unknown): boolean => jsonDepth(value, MAX_NESTING_DEPTH) > MAX_NESTING_DEPTH
+export const isTooDeep = (value: unknown): boolean => jsonDepth(value, MAX_NESTING_DEPTH) > MAX_NESTING_DEPTH
 
 const inRange = (value: number, min: number, max: number): boolean => value >= min && value <= max
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
+export const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const isTextOrContainer = (value: unknown): value is StateValue =>

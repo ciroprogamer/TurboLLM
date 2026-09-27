@@ -1,7 +1,8 @@
 // One JSON input of a System One request (ADR-439): a plain textarea with a live status line.
-// There is no editor library on purpose (nothing new is added to the web app), and Tab is left
-// alone, because capturing it would make the control a keyboard trap.
-import { useMemo } from 'react'
+// There is no editor library on purpose (nothing new is added to the web app). Tab indents instead
+// of moving focus, the usual code-editor convention; Shift+Tab is left alone as the escape hatch, so
+// the control is never a full keyboard trap.
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { Button } from '../../components/ui/button'
 import { jsonDepth, MAX_NESTING_DEPTH } from '../../lib/systemone-types'
 
@@ -24,6 +25,8 @@ type Status = { text: string; invalid: boolean }
 const VALID_STATUS = 'Valid JSON'
 const PLAIN_TEXT_STATUS = 'Plain text – sent as a string.'
 
+const TAB_INDENT = '  '
+
 export function JsonEditor({ id, label, value, onChange, mode, problem, caption }: JsonEditorProps) {
   const inspection = useMemo(() => inspectJson(value), [value])
   const status = describeStatus(mode, value, inspection)
@@ -32,8 +35,40 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
   // The status line already says why unparseable text is wrong: one message per fault, not two.
   const shownProblem = status.invalid ? undefined : problem
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pendingCaret = useRef<number | null>(null)
+  // Restoring the caret has to wait for the value we just sent up to come back down as this
+  // textarea's own prop; doing it inline in the key handler would set it right before React
+  // overwrites the DOM value and moves the caret to the end.
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current
+    if (caret === null) return
+    pendingCaret.current = null
+    textareaRef.current?.setSelectionRange(caret, caret)
+  }, [value])
+
   function format() {
     if (inspection.valid) onChange(JSON.stringify(inspection.value, null, 2))
+  }
+
+  /** The same reformat Format runs, so leaving the editor tidies valid JSON without a click. Skipped
+   *  when it would be a no-op (already formatted) or unsafe (unformattable), exactly Format's own rule. */
+  function formatOnBlur() {
+    if (!canFormat || !inspection.valid) return
+    const formatted = JSON.stringify(inspection.value, null, 2)
+    if (formatted !== value) onChange(formatted)
+  }
+
+  /** Tab inserts an indent, as in a code editor, rather than leaving the field: JSON is typed here
+   *  more than it is tabbed past. Shift+Tab is untouched, so leaving backward always still works. */
+  function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Tab' || event.shiftKey) return
+    event.preventDefault()
+    const el = event.currentTarget
+    const start = el.selectionStart ?? value.length
+    const end = el.selectionEnd ?? value.length
+    pendingCaret.current = start + TAB_INDENT.length
+    onChange(value.slice(0, start) + TAB_INDENT + value.slice(end))
   }
 
   return (
@@ -43,9 +78,12 @@ export function JsonEditor({ id, label, value, onChange, mode, problem, caption 
       </label>
       <textarea
         id={id}
+        ref={textareaRef}
         className="col-span-2 row-start-2 min-h-[140px] w-full resize-y rounded-md border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-accent placeholder:text-faint"
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={formatOnBlur}
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"

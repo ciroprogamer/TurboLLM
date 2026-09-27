@@ -6,7 +6,7 @@
 // failure mode that matters is a redirect loop, so the rules have to be testable without a
 // router, a store or a poll.
 import { isSystemOneModel } from './model-kind'
-import type { ModelEntry, Status } from './types'
+import type { ModelEntry, ModelsList, Status } from './types'
 
 export const TEXT_CLASSIFICATION_PATH = '/workspace/text-classification'
 
@@ -17,7 +17,7 @@ export const LEGACY_JEV_PATH = '/workspace/jev'
  *  cannot read /status at all, and guessing "none" would bounce a deep link. */
 export type JevPresence = 'unknown' | 'none' | 'loaded'
 
-const CHAT_PATH = '/workspace/chat'
+export const CHAT_PATH = '/workspace/chat'
 
 const WORK_PATHS = [CHAT_PATH, '/workspace/code', '/workspace/routines']
 
@@ -56,10 +56,23 @@ function isAtOrUnder(pathname: string, section: string): boolean {
   return pathname === section || pathname.startsWith(`${section}/`)
 }
 
+/** The library as the rules here read it, or undefined while it is not read yet. Right after a daemon restart the
+ *  models list answers empty while its first scan runs: that is "not read yet", not "the library holds nothing". */
+export function modelsOnceScanned(data: ModelsList | undefined): ModelEntry[] | undefined {
+  if (data?.scanning && data.models.length === 0) return undefined
+  return data?.models
+}
+
 /** Whether the Workspace offers its "Text classification" tab (ADR-444, amended 2026-09-25): one is loaded, or the
  *  library holds one to load. It stays after an eject, so the tab never vanishes under the user. */
 export function hasTextClassifier(status: Status | undefined, models: ModelEntry[] | undefined): boolean {
-  return !!status?.textClassification || libraryHoldsTextClassifier(models)
+  return statusReportsTextClassifier(status) || libraryHoldsTextClassifier(models)
+}
+
+/** The one field is the authority (ADR-444); an older daemon names each runtime's model in a field of its own. */
+function statusReportsTextClassifier(status: Status | undefined): boolean {
+  if (status && 'textClassification' in status) return !!status.textClassification
+  return !!status?.jev || !!status?.laya
 }
 
 /** Whether the playground has something to offer: a text classification model loaded to run, or one in the library

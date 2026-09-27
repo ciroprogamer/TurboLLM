@@ -11,15 +11,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceModeGate } from './App'
 import type { ModelEntry, Status } from './lib/types'
 
-const state: { status: Status | undefined; models: ModelEntry[] | undefined } = {
+const state: { status: Status | undefined; models: ModelEntry[] | undefined; scanning: boolean } = {
   status: undefined,
   models: undefined,
+  scanning: false,
 }
 
 vi.mock('./lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/queries')>()),
   useStatus: () => ({ data: state.status }),
-  useModels: () => ({ data: state.models ? { models: state.models, scanning: false } : undefined }),
+  useModels: () => ({ data: state.models ? { models: state.models, scanning: state.scanning } : undefined }),
 }))
 
 const JEV = {
@@ -62,6 +63,7 @@ function landOn(path: string) {
 beforeEach(() => {
   state.status = undefined
   state.models = undefined
+  state.scanning = false
 })
 
 describe('WorkspaceModeGate', () => {
@@ -77,10 +79,12 @@ describe('WorkspaceModeGate', () => {
     expect(landOn('/workspace/text-classification')).toBe('/workspace/text-classification null')
   })
 
-  it('sends the playground back to Chat once nothing Jev is loaded, without an explanation', () => {
+  // The ejected Jev model is still in the library, so the gate keeps the playground open: going back to Chat after a
+  // chat pick is the playground's own step (JevPlaygroundScreen.test.tsx), not the gate's.
+  it('keeps the playground open once the Jev model is ejected, since the library still holds it', () => {
     state.status = { jev: null } as Status
-    state.models = []
-    expect(landOn('/workspace/text-classification')).toBe('/workspace/chat {"takeoverNotice":false}')
+    state.models = [CHAT_MODEL, { key: 'jev-key', name: 'qwen3.5 4b nli v2', loaded: false, jev: { labels: [] } } as unknown as ModelEntry]
+    expect(landOn('/workspace/text-classification')).toBe('/workspace/text-classification null')
   })
 
   it('never bounces a deep link on a guess', () => {
@@ -156,6 +160,20 @@ describe('WorkspaceModeGate with nothing loaded', () => {
     state.status = NOTHING_LOADED
     state.models = [CHAT_MODEL, LIBRARY_LAYA]
     expect(landOn('/workspace/chat/abc')).toBe('/workspace/chat/abc null')
+  })
+
+  // Right after a daemon restart the models list answers empty while its first scan runs.
+  it('does not bounce a deep link to the playground while the first scan has found nothing yet', () => {
+    state.status = NOTHING_LOADED
+    state.models = []
+    state.scanning = true
+    expect(landOn('/workspace/text-classification')).toBe('/workspace/text-classification null')
+  })
+
+  it('sends the playground back to Chat once the scan has finished and found none', () => {
+    state.status = NOTHING_LOADED
+    state.models = []
+    expect(landOn('/workspace/text-classification')).toBe('/workspace/chat {"takeoverNotice":false}')
   })
 })
 

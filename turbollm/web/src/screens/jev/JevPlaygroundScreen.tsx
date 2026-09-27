@@ -7,14 +7,15 @@
 // It holds no conversation and no history. Its left column is the Workspace's own: the mode control
 // and the library's text classification models, so the page is a starting point, not only a destination.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { WorkspaceModeTabs } from '../../components/WorkspaceModeTabs'
 import { Button } from '../../components/ui/button'
 import { ApiError, stopEngine, track } from '../../lib/api'
 import { systemone } from '../../lib/jev-api'
-import { hasTextClassifier } from '../../lib/jev-mode'
-import { useModelLoader } from '../../lib/model-loader'
-import { useModels, useStatus } from '../../lib/queries'
+import { CHAT_PATH, hasTextClassifier, jevPresence, modelsOnceScanned, type JevPresence } from '../../lib/jev-mode'
+import { isSystemOneModel } from '../../lib/model-kind'
+import { useModelLoader, type LoadTarget } from '../../lib/model-loader'
+import { useModelActions, useModels, useStatus } from '../../lib/queries'
 import { loadedSystemOneModel } from '../../lib/systemone-model'
 import type { LoadedJev, ModelEntry, Status } from '../../lib/types'
 import { useIsDesktop } from '../../lib/useIsDesktop'
@@ -39,9 +40,11 @@ export function JevPlaygroundScreen() {
   const modelsQ = useModels()
   const location = useLocation()
   const { requestLoad, pendingKey } = useModelLoader()
+  const { eject } = useModelActions()
 
-  const models = modelsQ.data?.models
+  const models = modelsOnceScanned(modelsQ.data)
   const jev = loadedSystemOneModel(statusQ.data, models)
+  const loadReturningToChat = useLoadReturningToChat(jevPresence(statusQ.data, models), requestLoad)
 
   const [draft, setDraft] = useState<SystemOneDraft>(() => readStoredDraft() ?? firstDraft())
   const [run, setRun] = useState<SystemOneRun | null>(null)
@@ -108,15 +111,15 @@ export function JevPlaygroundScreen() {
       current={jev}
       pendingKey={pendingKey}
       onLoad={loadModel}
-      onEject={(m) => void ejectModel(m, { stopEngine })}
+      onEject={(m) => void ejectModel(m, { stopEngine: eject.mutateAsync })}
     />
   )
 
   if (!jev) {
-    if (!hasTextClassifier(statusQ.data, models)) return null
+    if (models !== undefined && !hasTextClassifier(statusQ.data, models)) return null
     return (
       <PlaygroundColumns modelList={modelList}>
-        <NothingLoaded modelList={modelList} />
+        {models === undefined ? <LoadingModels /> : <NothingLoaded modelList={modelList} />}
       </PlaygroundColumns>
     )
   }
@@ -144,7 +147,8 @@ export function JevPlaygroundScreen() {
 
   function pickModel(m: ModelEntry) {
     setSwitchOpen(false)
-    loadModel(m)
+    const load = isSystemOneModel(m) ? requestLoad : loadReturningToChat
+    void switchToModel(jev, m, { stopEngine, requestLoad: load })
   }
 
   return (
@@ -221,6 +225,23 @@ export function JevPlaygroundScreen() {
   )
 }
 
+type RequestLoad = ReturnType<typeof useModelLoader>['requestLoad']
+
+/** A chat model picked in Switch model takes the Workspace back to Chat (ADR-434 (i)(5)), but only once the gate lets
+ *  it stay there: until the chat model has replaced a Jev model, the gate sends /workspace/chat straight back here. A
+ *  refused load leaves the playground where it is. */
+function useLoadReturningToChat(presence: JevPresence, requestLoad: RequestLoad): (target: LoadTarget) => void {
+  const navigate = useNavigate()
+  const [returningToChat, setReturningToChat] = useState(false)
+  useEffect(() => {
+    if (returningToChat && presence !== 'loaded') navigate(CHAT_PATH)
+  }, [returningToChat, presence, navigate])
+  return (target) => {
+    setReturningToChat(true)
+    requestLoad(target, { onError: () => setReturningToChat(false) })
+  }
+}
+
 /** The playground's place in the Workspace: on a desktop, the same left column as the other Workspace modes; on a
  *  phone, where there is no room for one, the mode control on top and the model list behind Switch model. */
 function PlaygroundColumns({ modelList, children }: { modelList: ReactNode; children: ReactNode }) {
@@ -252,7 +273,7 @@ function PlaygroundColumns({ modelList, children }: { modelList: ReactNode; chil
 function NothingLoaded({ modelList }: { modelList: ReactNode }) {
   const isDesktop = useIsDesktop()
   return (
-    <div role="status" className="mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+    <CentredStatus>
       <div className="flex flex-col gap-1">
         <p className="text-[13px] text-ink">No text classification model is loaded.</p>
         <p className="text-[13px] text-muted">Load one from the list to try it.</p>
@@ -261,6 +282,23 @@ function NothingLoaded({ modelList }: { modelList: ReactNode }) {
         Find one in Discover
       </Link>
       {!isDesktop && <div className="w-full rounded-md border border-border text-left">{modelList}</div>}
+    </CentredStatus>
+  )
+}
+
+function LoadingModels() {
+  return (
+    <CentredStatus>
+      <p className="text-[13px] text-muted">Loading models…</p>
+    </CentredStatus>
+  )
+}
+
+/** Centred in the pane and announced, as the chat screen's own empty state is. */
+function CentredStatus({ children }: { children: ReactNode }) {
+  return (
+    <div role="status" className="mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+      {children}
     </div>
   )
 }

@@ -2,8 +2,8 @@
 //
 // An inline list rather than a dropdown: it is the only navigation this screen has, and it
 // answers the question the screen raises — "how do I get back to Chat?" — without a click to
-// discover it. Nothing here navigates; loading a chat model clears `status.jev`, and the
-// Workspace gate takes the user back on its own.
+// discover it. Nothing here navigates: the playground takes the user back to Chat once a chat
+// model picked here has replaced its own.
 import { ApiError, track } from '../../lib/api'
 import type { LoadOptions, LoadTarget } from '../../lib/model-loader'
 import { isSystemOneModel } from '../../lib/model-kind'

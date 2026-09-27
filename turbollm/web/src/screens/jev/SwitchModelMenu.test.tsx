@@ -190,9 +190,9 @@ describe('switchToModel', () => {
     expect(d.requestLoad).toHaveBeenCalledWith(LAYA)
   })
 
-  // A Laya model runs beside chat, so leaving it loaded would keep the playground open: the pick would load in the
-  // background and the screen would not move. Switching model in the playground replaces the playground's model.
-  it('ejects a loaded Laya model when a chat model is picked, so the pick takes the Workspace back to chat', async () => {
+  // A Laya model runs beside chat, so it would stay loaded behind the chat model. Switching model in the playground
+  // replaces the playground's model; going back to chat is the playground's own step (JevPlaygroundScreen.test.tsx).
+  it('ejects a loaded Laya model before loading the chat model picked', async () => {
     const d = deps()
     const layaCurrent = { key: 'laya', name: 'Laya', labels: [], checkpoints: ['english'], state: 'running' as const, slot: 'pool' as const }
     await switchToModel(layaCurrent, CHAT, d)

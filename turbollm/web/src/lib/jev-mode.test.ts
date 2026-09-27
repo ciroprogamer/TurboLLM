@@ -10,10 +10,11 @@ import {
   hasTextClassifier,
   isWorkspaceWorkPath,
   jevPresence,
+  modelsOnceScanned,
   playgroundAvailable,
   workspaceRedirect,
 } from './jev-mode'
-import type { JevInfo, JevStatus, ModelEntry, Status, TextClassificationStatus } from './types'
+import type { JevInfo, JevStatus, ModelEntry, ModelsList, Status, TextClassificationStatus } from './types'
 
 const JEV_INFO: JevInfo = {
   labels: ['contradiction', 'entailment', 'neutral'],
@@ -182,6 +183,8 @@ const NOTHING_LOADED = { textClassification: null, jev: null, laya: null } as un
 const LIBRARY_LAYA = model({ key: 'laya|laya|1455', name: 'laya', laya: { checkpoints: ['english'] }, loaded: false })
 const LIBRARY_JEV = model({ key: LOADED.key, name: LOADED.name, jev: JEV_INFO, loaded: false })
 const LIBRARY_CHAT = model({ key: 'gemma-27b', name: 'Gemma 27B', loaded: true })
+/** An older daemon's own Laya field. */
+const LAYA_STATUS = { key: 'laya|laya|1455', name: 'laya', checkpoints: ['english'], state: 'running' as const }
 
 // ADR-444, amended 2026-09-25: the Workspace's "Text classification" tab is there whenever the user has such a model
 // to use — loaded, or waiting in the library — and stays after an eject.
@@ -209,11 +212,18 @@ describe('hasTextClassifier', () => {
     expect(hasTextClassifier(statusWith(null), [LIBRARY_LAYA])).toBe(true)
     expect(hasTextClassifier(statusWith(null), [LIBRARY_CHAT])).toBe(false)
   })
+
+  it('is true for a model an older daemon reports loaded, before the library has been read', () => {
+    expect(hasTextClassifier(statusWith(LOADED), undefined)).toBe(true)
+    expect(hasTextClassifier({ jev: null, laya: LAYA_STATUS } as unknown as Status, undefined)).toBe(true)
+  })
+
+  it('believes the one text classification field over an older one saying otherwise', () => {
+    expect(hasTextClassifier({ textClassification: null, jev: LOADED } as unknown as Status, undefined)).toBe(false)
+  })
 })
 
 describe('playgroundAvailable', () => {
-  const LAYA_STATUS = { key: 'laya|laya|1455', name: 'laya', checkpoints: ['english'], state: 'running' as const }
-
   it('is true for a text classification model on either runtime', () => {
     expect(playgroundAvailable(statusWithTextClassifier(JEV_TEXT_CLASSIFIER), [])).toBe(true)
     expect(playgroundAvailable(statusWithTextClassifier(LAYA_TEXT_CLASSIFIER), [])).toBe(true)
@@ -260,5 +270,31 @@ describe('the playground with nothing loaded', () => {
 
   it('never redirects while nothing has been read', () => {
     expect(redirectOf(undefined, undefined)).toBeNull()
+  })
+})
+
+// Right after a daemon restart or update, GET /api/v1/models answers `{ models: [], scanning: true }` until the first
+// scan lands. An empty list then means "not read yet", and reading it as "the library holds nothing" would bounce a
+// deep link to the playground.
+describe('modelsOnceScanned', () => {
+  function modelsList(models: ModelEntry[], scanning: boolean): ModelsList {
+    return { models, scanning, lastScanAt: '' }
+  }
+
+  it('is undefined while the models list has not arrived', () => {
+    expect(modelsOnceScanned(undefined)).toBeUndefined()
+  })
+
+  it('is undefined while the first scan runs and has found nothing yet', () => {
+    expect(modelsOnceScanned(modelsList([], true))).toBeUndefined()
+  })
+
+  it('is the models a scan in progress has already found', () => {
+    expect(modelsOnceScanned(modelsList([LIBRARY_LAYA], true))).toEqual([LIBRARY_LAYA])
+  })
+
+  it('is the library, empty or not, once the scan has finished', () => {
+    expect(modelsOnceScanned(modelsList([], false))).toEqual([])
+    expect(modelsOnceScanned(modelsList([LIBRARY_CHAT], false))).toEqual([LIBRARY_CHAT])
   })
 })

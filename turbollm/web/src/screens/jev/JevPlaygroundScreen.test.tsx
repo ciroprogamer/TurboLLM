@@ -2,12 +2,15 @@
 // the System One request as two JSON editors, with the answers beside them.
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JevPlaygroundScreen } from './JevPlaygroundScreen'
 import { draftRequest } from './systemone-draft'
 import { SYSTEMONE_EXAMPLES } from './systemone-examples'
 import { ApiError } from '../../lib/api'
+import { queryKeys } from '../../lib/queries'
 import type { ModelEntry, Status } from '../../lib/types'
 import type { SystemOneResponse } from '../../lib/systemone-types'
 
@@ -18,11 +21,17 @@ const h = vi.hoisted(() => ({
   requestLoad: vi.fn(),
 }))
 
-const state: { status: Status | undefined; models: ModelEntry[]; desktop: boolean } = { status: undefined, models: [], desktop: true }
+const state: { status: Status | undefined; models: ModelEntry[] | undefined; scanning: boolean; desktop: boolean } = {
+  status: undefined,
+  models: [],
+  scanning: false,
+  desktop: true,
+}
 
-vi.mock('../../lib/queries', () => ({
+vi.mock('../../lib/queries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/queries')>()),
   useStatus: () => ({ data: state.status }),
-  useModels: () => ({ data: { models: state.models, scanning: false } }),
+  useModels: () => ({ data: state.models ? { models: state.models, scanning: state.scanning } : undefined }),
   useSettings: () => ({ query: { data: { experimental: { routines: false } } } }),
   useSysInfo: () => ({ data: { os: 'linux/x64' }, isError: false }),
 }))
@@ -96,11 +105,19 @@ function jevModel(over: Partial<ModelEntry> = {}): ModelEntry {
   } as ModelEntry
 }
 
+/** The real query cache: an eject has to refresh what the playground reads. */
+let queryClient = new QueryClient()
+
+function WithQueryClient({ children }: { children: ReactNode }) {
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+}
+
 function renderScreen(notice = false) {
   return render(
     <MemoryRouter initialEntries={[{ pathname: '/workspace/text-classification', state: notice ? { takeoverNotice: true } : undefined }]}>
       <JevPlaygroundScreen />
     </MemoryRouter>,
+    { wrapper: WithQueryClient },
   )
 }
 
@@ -167,7 +184,9 @@ beforeEach(() => {
   h.systemone.mockResolvedValue(RESPONSE)
   state.status = status()
   state.models = [jevModel()]
+  state.scanning = false
   state.desktop = true
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   window.localStorage.clear()
 })
 
@@ -225,7 +244,7 @@ describe('JevPlaygroundScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Switch model' }))
     await userEvent.click(within(screen.getByRole('group', { name: 'Chat models' })).getByRole('button'))
 
-    await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(chat))
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(chat, expect.anything()))
     expect(h.stopEngine).toHaveBeenCalledWith(KEY)
     expect(h.track).toHaveBeenCalledWith('workspace', 'jev_switch_model')
   })
@@ -875,6 +894,36 @@ describe('JevPlaygroundScreen with nothing loaded', () => {
   })
 })
 
+// Status often answers before the models list does, and the list may never answer at all: nothing retries a failed
+// first request. The page must not be blank meanwhile.
+describe('JevPlaygroundScreen before the library has been read', () => {
+  beforeEach(() => {
+    state.status = NOTHING_LOADED
+  })
+
+  function expectLoadingInTheWorkspace() {
+    expect(screen.getByRole('group', { name: 'Workspace mode' })).toBeInTheDocument()
+    expect(modelList()).toBeInTheDocument()
+    const loading = screen.getByRole('status')
+    expect(loading).toHaveTextContent('Loading models…')
+    expect(loading).toHaveClass('items-center', 'justify-center', 'text-center')
+    expect(screen.queryByText('No text classification model is loaded.')).toBeNull()
+  }
+
+  it('shows the left column and says the models are loading while the list has not arrived', () => {
+    state.models = undefined
+    renderScreen()
+    expectLoadingInTheWorkspace()
+  })
+
+  it('says the same while the first scan has found nothing yet', () => {
+    state.models = []
+    state.scanning = true
+    renderScreen()
+    expectLoadingInTheWorkspace()
+  })
+})
+
 describe('JevPlaygroundScreen model list', () => {
   it('ejects the loaded Jev model', async () => {
     h.stopEngine.mockResolvedValue({ ok: true })
@@ -883,6 +932,33 @@ describe('JevPlaygroundScreen model list', () => {
     await waitFor(() => expect(h.stopEngine).toHaveBeenCalledWith(KEY))
     expect(h.track).toHaveBeenCalledWith('workspace', 'eject_model')
     expect(h.requestLoad).not.toHaveBeenCalled()
+  })
+
+  function readLibraryAndStatus() {
+    queryClient.setQueryData(queryKeys.models, { models: state.models, scanning: false, lastScanAt: '' })
+    queryClient.setQueryData(queryKeys.status, state.status)
+  }
+
+  const isRefreshing = (queryKey: readonly string[]) => queryClient.getQueryState(queryKey)?.isInvalidated
+
+  it('refreshes the model list and the status once the eject has succeeded, so the row stops offering Eject', async () => {
+    h.stopEngine.mockResolvedValue({ ok: true })
+    readLibraryAndStatus()
+    renderScreen()
+    await userEvent.click(within(modelList()).getByRole('button', { name: 'Eject qwen3.5 4b nli v2' }))
+    await waitFor(() => expect(isRefreshing(queryKeys.models)).toBe(true))
+    expect(isRefreshing(queryKeys.status)).toBe(true)
+  })
+
+  it('refreshes nothing when the eject is refused', async () => {
+    h.stopEngine.mockRejectedValue(new ApiError('engine_busy', 'The engine is still generating.', 409))
+    readLibraryAndStatus()
+    renderScreen()
+    await userEvent.click(within(modelList()).getByRole('button', { name: 'Eject qwen3.5 4b nli v2' }))
+    await waitFor(() => expect(h.stopEngine).toHaveBeenCalledWith(KEY))
+    await tick()
+    expect(isRefreshing(queryKeys.models)).toBe(false)
+    expect(isRefreshing(queryKeys.status)).toBe(false)
   })
 
   it('ejects the loaded Laya model before loading a Jev model, as the Switch model menu does', async () => {
@@ -896,5 +972,102 @@ describe('JevPlaygroundScreen model list', () => {
     await userEvent.click(within(modelList()).getByRole('button', { name: 'Load qwen3.5 4b nli v2' }))
     await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(jevModel({ loaded: false })))
     expect(h.stopEngine).toHaveBeenCalledWith(LAYA_KEY)
+  })
+})
+
+function CurrentPath() {
+  return <output data-testid="current-path">{useLocation().pathname}</output>
+}
+
+/** The playground with the router's location beside it. `rerenderScreen` is the next status poll arriving. */
+function renderScreenTrackingPath() {
+  const tree = () => (
+    <MemoryRouter initialEntries={['/workspace/text-classification']}>
+      <JevPlaygroundScreen />
+      <CurrentPath />
+    </MemoryRouter>
+  )
+  const view = render(tree(), { wrapper: WithQueryClient })
+  return { rerenderScreen: () => view.rerender(tree()) }
+}
+
+function currentPath(): string | null {
+  return screen.getByTestId('current-path').textContent
+}
+
+async function pickInSwitchModel(group: string, name: string) {
+  await userEvent.click(screen.getByRole('button', { name: 'Switch model' }))
+  await userEvent.click(within(screen.getByRole('group', { name: group })).getByRole('button', { name }))
+}
+
+// ADR-434 (i)(5): picking a chat model in Switch model puts the Workspace back to Chat. The library still holds the
+// text classification model, so the Workspace gate no longer does it; the playground does.
+describe('JevPlaygroundScreen switching to a chat model', () => {
+  const LAYA_LOADED = {
+    ...NOTHING_LOADED,
+    textClassification: { key: LAYA_KEY, name: 'laya', runtime: 'laya', state: 'running', slot: 'pool', checkpoints: ['english'] },
+  } as unknown as Status
+
+  beforeEach(() => {
+    h.stopEngine.mockResolvedValue({ ok: true })
+  })
+
+  it('goes back to chat once the chat model has replaced the Jev model, not while the gate would send it back', async () => {
+    state.models = [jevModel(), CHAT_MODEL]
+    const { rerenderScreen } = renderScreenTrackingPath()
+    await pickInSwitchModel('Chat models', 'Gemma 27B')
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalled())
+    expect(h.requestLoad.mock.calls[0][0]).toBe(CHAT_MODEL)
+    expect(currentPath()).toBe('/workspace/text-classification')
+
+    state.status = status({ jev: null })
+    rerenderScreen()
+    await waitFor(() => expect(currentPath()).toBe('/workspace/chat'))
+  })
+
+  it('goes straight back to chat from a Laya model, which never held the Workspace', async () => {
+    state.status = LAYA_LOADED
+    state.models = [{ ...LIBRARY_LAYA, loaded: true }, CHAT_MODEL]
+    renderScreenTrackingPath()
+    await pickInSwitchModel('Chat models', 'Gemma 27B')
+    await waitFor(() => expect(currentPath()).toBe('/workspace/chat'))
+    expect(h.stopEngine).toHaveBeenCalledWith(LAYA_KEY)
+  })
+
+  it('stays in the playground when another text classification model is picked', async () => {
+    state.models = [jevModel(), LIBRARY_LAYA, CHAT_MODEL]
+    const { rerenderScreen } = renderScreenTrackingPath()
+    await pickInSwitchModel('Text classification models', 'laya')
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(LIBRARY_LAYA))
+
+    state.status = LAYA_LOADED
+    rerenderScreen()
+    await tick()
+    expect(currentPath()).toBe('/workspace/text-classification')
+  })
+
+  it('stays in the playground when a model is loaded from the list', async () => {
+    state.status = NOTHING_LOADED
+    state.models = [LIBRARY_LAYA, CHAT_MODEL]
+    renderScreenTrackingPath()
+    await userEvent.click(within(modelList()).getByRole('button', { name: 'Load laya' }))
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalledWith(LIBRARY_LAYA))
+    await tick()
+    expect(currentPath()).toBe('/workspace/text-classification')
+  })
+
+  it('stays in the playground when the chat model refuses to load, even once the Jev model is ejected later', async () => {
+    h.requestLoad.mockImplementation((_target: ModelEntry, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.(new ApiError('engine_busy', 'The engine is still generating.', 409))
+    })
+    state.models = [jevModel(), CHAT_MODEL]
+    const { rerenderScreen } = renderScreenTrackingPath()
+    await pickInSwitchModel('Chat models', 'Gemma 27B')
+    await waitFor(() => expect(h.requestLoad).toHaveBeenCalled())
+
+    state.status = status({ jev: null })
+    rerenderScreen()
+    await tick()
+    expect(currentPath()).toBe('/workspace/text-classification')
   })
 })

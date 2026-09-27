@@ -6,7 +6,7 @@
 import { AlarmClock, FlaskConical, MessageSquare, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import { track } from '../lib/api'
-import { TEXT_CLASSIFICATION_PATH, hasTextClassifier, jevPresence } from '../lib/jev-mode'
+import { TEXT_CLASSIFICATION_PATH, hasTextClassifier, jevPresence, modelsOnceScanned } from '../lib/jev-mode'
 import { useCodeFeatureEnabled } from '../lib/platform'
 import { useModels, useSettings, useStatus } from '../lib/queries'
 import { loadedSystemOneModel } from '../lib/systemone-model'
@@ -32,7 +32,7 @@ export function WorkspaceModeTabs({ collapsed = false }: { collapsed?: boolean }
 
 function useModeRows(): ModeTab[][] {
   const status = useStatus().data
-  const models = useModels().data?.models
+  const models = modelsOnceScanned(useModels().data)
   const workTabs = useWorkTabs()
   const textClassificationTab = textClassificationTabFor(status, models)
   if (jevPresence(status, models) === 'loaded') return [[textClassificationTab]]

@@ -45,8 +45,9 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 ### Changed
 
 - **An open thinking block now grows with the reasoning** instead of scrolling inside a small fixed box, so a fast
-  model's reasoning can be skimmed as it streams. It still starts collapsed, and the "hide thinking" setting is
-  unchanged.
+  model's reasoning can be skimmed as it streams. Drag its bottom edge to set a size: it is remembered, shared by
+  every thinking block, and the newest text stays in view while it streams. It still starts collapsed, and the "hide
+  thinking" setting is unchanged.
 - **Windows installer: a running TurboLLM gets about a minute to close**, retried automatically, before the installer
   asks you to close it. If it still can't, what the installer found running is written to
   `%TEMP%\TurboLLM-installer-diagnostic.log`.

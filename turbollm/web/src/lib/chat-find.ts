@@ -20,8 +20,14 @@ export function paintFindHighlights(matches: Range[], currentIndex: number): voi
   registry.set(CURRENT_MATCH_HIGHLIGHT, currentHighlight)
 }
 
-export function scrollMatchIntoView(match: Range): void {
-  match.startContainer.parentElement?.scrollIntoView({ block: 'center' })
+// Scrolls to the match itself, not to the element holding it: one long paragraph or code block can
+// hold hundreds of matches, and centring that element never moves as the match changes inside it.
+export function scrollMatchIntoView(match: Range, scroller: HTMLElement): void {
+  const matchBox = match.getBoundingClientRect()
+  if (matchBox.height === 0) return
+
+  const matchMiddle = matchBox.top - scroller.getBoundingClientRect().top + scroller.scrollTop + matchBox.height / 2
+  scroller.scrollTo({ top: matchMiddle - scroller.clientHeight / 2 })
 }
 
 export function clearFindHighlights(): void {

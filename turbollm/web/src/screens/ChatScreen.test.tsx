@@ -120,7 +120,9 @@ function openConversation() {
 async function renderOpenConversation() {
   const { ChatScreen } = await import('./ChatScreen')
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: () => {} })
+  // jsdom has no layout: give matches a position and let the chat be scrolled without doing anything.
+  Object.defineProperty(Element.prototype, 'scrollTo', { configurable: true, writable: true, value: () => {} })
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, writable: true, value: () => ({ top: 0, height: 20 }) })
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/chat/c1']}>

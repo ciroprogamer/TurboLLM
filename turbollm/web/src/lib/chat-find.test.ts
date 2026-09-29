@@ -74,17 +74,63 @@ describe('findTextRanges', () => {
   })
 })
 
+// jsdom has no layout, so positions are stated: a match sits `characterOffset * 10` px below the top
+// of the page, and the scroll area starts 100px down, is 400px tall and is scrolled to 300px.
+function layOut(match: Range, top: number) {
+  match.getBoundingClientRect = () => ({ top, height: 20, bottom: top + 20, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) })
+}
+
+function scrollAreaAt(scrollTop: number): { scroller: HTMLElement; scrollTo: ReturnType<typeof vi.fn> } {
+  const scroller = document.createElement('div')
+  const scrollTo = vi.fn()
+  Object.defineProperties(scroller, {
+    scrollTo: { value: scrollTo },
+    clientHeight: { value: 400 },
+    scrollTop: { value: scrollTop, writable: true },
+  })
+  scroller.getBoundingClientRect = () => ({ top: 100, height: 400, bottom: 500, left: 0, right: 0, width: 0, x: 0, y: 100, toJSON: () => ({}) })
+  return { scroller, scrollTo }
+}
+
 describe('scrollMatchIntoView', () => {
-  it('brings the element holding the match to the middle of the scroll area', () => {
+  it('centres the match itself in the scroll area', () => {
     const root = messageList('<p>find me here</p>')
-    const paragraph = root.querySelector('p') as HTMLElement
-    const scrollIntoView = vi.fn()
-    Object.defineProperty(paragraph, 'scrollIntoView', { value: scrollIntoView })
     const [match] = findTextRanges(root, 'me')
+    layOut(match, 1000)
+    const { scroller, scrollTo } = scrollAreaAt(300)
 
-    scrollMatchIntoView(match)
+    scrollMatchIntoView(match, scroller)
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    // 1000 - 100 (area top) + 300 (already scrolled) + 10 (half the match) - 200 (half the area)
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1010 })
+  })
+
+  it('moves to each match inside one tall element, instead of staying on the element', () => {
+    const root = messageList('<p>ab ab ab</p>')
+    const [first, second, third] = findTextRanges(root, 'ab')
+    layOut(first, 500)
+    layOut(second, 1500)
+    layOut(third, 2500)
+    const { scroller, scrollTo } = scrollAreaAt(0)
+
+    scrollMatchIntoView(first, scroller)
+    scrollMatchIntoView(second, scroller)
+    scrollMatchIntoView(third, scroller)
+
+    const targets = scrollTo.mock.calls.map(([options]) => options.top)
+    expect(new Set(targets).size).toBe(3)
+    expect(targets).toEqual([...targets].sort((a, b) => a - b))
+  })
+
+  it('does not scroll to a match that has no position on screen', () => {
+    const root = messageList('<p>find me here</p>')
+    const [match] = findTextRanges(root, 'me')
+    match.getBoundingClientRect = () => ({ top: 0, height: 0, bottom: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) })
+    const { scroller, scrollTo } = scrollAreaAt(300)
+
+    scrollMatchIntoView(match, scroller)
+
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 })
 

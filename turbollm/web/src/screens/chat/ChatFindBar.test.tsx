@@ -1,22 +1,36 @@
 // GitHub #52 (b15hop): a find bar for long chat sessions. Rendered against a real DOM message list,
 // so the matching, the "3 of 17" count, and the jumping between matches are the real code paths.
-// The CSS highlight registry is a small stand-in (jsdom has none), and scrollIntoView is recorded.
+// jsdom has no layout, so two things are stood in for: the CSS highlight registry, and where things
+// are on the page. A match sits 100px per paragraph down the page, plus its character offset, and
+// every scroll of the chat is recorded as the position it was scrolled to.
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatFindBar } from './ChatFindBar'
 
 const CHAT_HTML = '<p>the cat sat</p><p>a dog</p><p>another cat here</p><p>last cat</p>'
+const MATCH_HEIGHT = 20
 
-let scrolledElements: Element[]
+let scrolledTo: number[]
 let highlightRegistry: Map<string, { ranges: Range[] }>
 
+function pageTopOf(match: Range): number {
+  const paragraph = match.startContainer.parentElement as HTMLElement
+  const paragraphIndex = [...(paragraph.parentElement as HTMLElement).children].indexOf(paragraph)
+  return paragraphIndex * 100 + match.startOffset
+}
+
 beforeEach(() => {
-  scrolledElements = []
-  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+  scrolledTo = []
+  Object.defineProperty(Element.prototype, 'scrollTo', {
     configurable: true,
     writable: true,
-    value(this: Element) { scrolledElements.push(this) },
+    value(this: Element, options: ScrollToOptions) { scrolledTo.push(options.top as number) },
+  })
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    writable: true,
+    value(this: Range) { return { top: pageTopOf(this), height: MATCH_HEIGHT } },
   })
 
   highlightRegistry = new Map()
@@ -33,15 +47,20 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function Harness({ onClose = () => {}, focusRequest = 0 }: { onClose?: () => void; focusRequest?: number }) {
+function Harness({ onClose = () => {}, focusRequest = 0, html = CHAT_HTML }: { onClose?: () => void; focusRequest?: number; html?: string }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   return (
     <>
       <ChatFindBar scrollerRef={scrollerRef} focusRequest={focusRequest} onClose={onClose} />
-      <div ref={scrollerRef} data-testid="scroller" dangerouslySetInnerHTML={{ __html: CHAT_HTML }} />
+      <div ref={scrollerRef} data-testid="scroller" dangerouslySetInnerHTML={{ __html: html }} />
     </>
   )
 }
+
+const HALF_A_MATCH = MATCH_HEIGHT / 2
+// Where the chat scrolls for each "cat" in CHAT_HTML: paragraph index * 100, plus the word's offset in it.
+const FIRST_CAT = 4 + HALF_A_MATCH // "the cat sat"
+const SECOND_CAT = 200 + 8 + HALF_A_MATCH // "another cat here"
 
 const findInput = () => screen.getByRole('textbox', { name: /find in chat/i }) as HTMLInputElement
 const search = (query: string) => fireEvent.change(findInput(), { target: { value: query } })
@@ -85,22 +104,42 @@ describe('ChatFindBar', () => {
     expect(highlightRegistry.get('tllm-find-active')?.ranges).toHaveLength(1)
   })
 
-  it('scrolls the first match into view as soon as it is found', () => {
+  it('scrolls the chat to the first match as soon as it is found', () => {
     render(<Harness />)
 
     search('cat')
 
-    expect(scrolledElements.map((el) => el.textContent)).toEqual(['the cat sat'])
+    expect(scrolledTo).toEqual([FIRST_CAT])
   })
 
-  it('Enter jumps to the next match and scrolls to it', () => {
+  it('Enter jumps to the next match and scrolls the chat to it', () => {
     render(<Harness />)
     search('cat')
 
     fireEvent.keyDown(findInput(), { key: 'Enter' })
 
     expect(count()).toBe('2 of 3')
-    expect(scrolledElements.at(-1)?.textContent).toBe('another cat here')
+    expect(scrolledTo.at(-1)).toBe(SECOND_CAT)
+  })
+
+  it('scrolls to every match, even when they are all inside one long message', () => {
+    render(<Harness html="<p>cat cat cat</p>" />)
+    search('cat')
+
+    fireEvent.keyDown(findInput(), { key: 'Enter' })
+    fireEvent.keyDown(findInput(), { key: 'Enter' })
+
+    expect(scrolledTo).toEqual([0 + HALF_A_MATCH, 4 + HALF_A_MATCH, 8 + HALF_A_MATCH])
+  })
+
+  it('scrolls the chat back when stepping to the previous match', () => {
+    render(<Harness />)
+    search('cat')
+    fireEvent.keyDown(findInput(), { key: 'Enter' })
+
+    fireEvent.keyDown(findInput(), { key: 'Enter', shiftKey: true })
+
+    expect(scrolledTo.at(-1)).toBe(FIRST_CAT)
   })
 
   it('Shift+Enter jumps back, and wraps from the first match to the last', () => {
@@ -187,7 +226,7 @@ describe('ChatFindBar', () => {
   it('takes new text into account while the chat is still streaming, without pulling the view away', async () => {
     render(<Harness />)
     search('cat')
-    const scrollsBefore = scrolledElements.length
+    const scrollsBefore = scrolledTo.length
 
     act(() => {
       const streamed = document.createElement('p')
@@ -196,7 +235,7 @@ describe('ChatFindBar', () => {
     })
 
     await waitFor(() => expect(count()).toBe('1 of 4'))
-    expect(scrolledElements).toHaveLength(scrollsBefore)
+    expect(scrolledTo).toHaveLength(scrollsBefore)
   })
 
   it('selects the existing search text when asked to focus again, so typing replaces it', () => {

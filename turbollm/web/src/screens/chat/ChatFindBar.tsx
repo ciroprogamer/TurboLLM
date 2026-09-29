@@ -74,20 +74,25 @@ function useChatFind(scrollerRef: RefObject<HTMLElement | null>) {
   const [currentIndex, setCurrentIndex] = useState(0)
   const latestQuery = useRef('')
 
+  const reveal = (match: Range | undefined) => {
+    const scroller = scrollerRef.current
+    if (match && scroller) scrollMatchIntoView(match, scroller)
+  }
+
   const search = (nextQuery: string) => {
     const found = findMatches(scrollerRef, nextQuery)
     latestQuery.current = nextQuery
     setQuery(nextQuery)
     setMatches(found)
     setCurrentIndex(0)
-    if (found[0]) scrollMatchIntoView(found[0])
+    reveal(found[0])
   }
 
   const step = (direction: 1 | -1) => {
     if (matches.length === 0) return
     const next = (currentIndex + direction + matches.length) % matches.length
     setCurrentIndex(next)
-    scrollMatchIntoView(matches[next])
+    reveal(matches[next])
   }
 
   useEffect(() => {

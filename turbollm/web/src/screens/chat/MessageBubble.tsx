@@ -17,15 +17,9 @@ import { track } from '../../lib/api'
 // ── Thinking block ────────────────────────────────────────────────────────────
 
 function ThinkingBlock({ reasoning, thinkMs, streaming, showThinking = true }: { reasoning: string; thinkMs?: number; streaming?: boolean; showThinking?: boolean }) {
-  // Always collapsed by default; expands into a fixed-height scroll window so long
-  // reasoning never balloons the chat.
+  // Collapsed by default. Once open it grows with the reasoning, so the chat's own scroll follows
+  // it as it streams: a fixed-height box made fast reasoning impossible to skim (GitHub #52).
   const [open, setOpen] = useState(false)
-  const scrollRef = useRef<HTMLPreElement>(null)
-  useEffect(() => {
-    if (open && streaming && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [reasoning, open, streaming])
   const label = thinkMs ? `Thought for ${(thinkMs / 1000).toFixed(1)}s` : streaming ? 'Thinking…' : 'Thinking'
   // When thinking is globally hidden, show only the stats line (no expand toggle).
   if (!showThinking) {
@@ -47,10 +41,7 @@ function ThinkingBlock({ reasoning, thinkMs, streaming, showThinking = true }: {
         {streaming && !open && <span className="tllm-pulse ml-0.5">·</span>}
       </button>
       {open && (
-        <pre
-          ref={scrollRef}
-          className="max-h-48 overflow-auto px-3 pb-3 font-mono text-[12px] leading-relaxed text-muted whitespace-pre-wrap"
-        >
+        <pre className="px-3 pb-3 font-mono text-[12px] leading-relaxed text-muted whitespace-pre-wrap break-words">
           {reasoning}
         </pre>
       )}

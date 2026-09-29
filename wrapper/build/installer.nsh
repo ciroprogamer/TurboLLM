@@ -21,6 +21,7 @@
 !define TURBOLLM_POLL_MS           1000
 !define TURBOLLM_GRACE_POLLS       3
 !define TURBOLLM_FORCE_ATTEMPTS    3
+!define TURBOLLM_SETTLE_POLLS      2
 ; nsExec's /TIMEOUT waits for output and restarts whenever output arrives. The commands below print
 ; next to nothing before they exit, which is what keeps each call bounded in practice.
 !define TURBOLLM_EXEC_TIMEOUT_MS   15000
@@ -85,12 +86,29 @@
   ${EndIf}
 !macroend
 
+; A process can drop out of the tasklist/WMI probe a moment before Windows actually finishes
+; releasing its file handles (a lagging antivirus scan, a driver's own teardown), so the step that
+; runs right after this one - the previous version's own uninstaller, or this installer's file copy -
+; can still hit a locked file even though TURBOLLM_IS_RUNNING just reported nothing running. This
+; requires TURBOLLM_SETTLE_POLLS consecutive clean probes, a full poll interval apart, before the
+; caller trusts ${_OUT} == 0; a probe that flips back to running is treated like a fresh failure.
+!macro TURBOLLM_SETTLE _OUT
+  ${For} $R1 1 ${TURBOLLM_SETTLE_POLLS}
+    Sleep ${TURBOLLM_POLL_MS}
+    !insertmacro TURBOLLM_IS_RUNNING ${_OUT}
+    ${If} ${_OUT} == 1
+      ${ExitFor}
+    ${EndIf}
+  ${Next}
+!macroend
+
 ; Called only when something runs. The installer closes gracefully first, so TurboLLM can quit
 ; through its own shutdown, then forces what cannot answer a close (no window yet, a cancelled
 ; close, a background process left under the install folder). The uninstaller forces at once: a
 ; graceful quit lets electron-updater start a downloaded update's installer, which would then run
 ; next to this uninstaller (only the installer holds the one-instance mutex). A forced end runs no
-; quit handler. ${_OUT} ends as the last probe: 1 means something still runs after the whole budget.
+; quit handler. ${_OUT} ends as the last probe: 1 means something still runs after the whole budget,
+; including one bounded extra force-close if settling turns up something the close loops missed.
 !macro TURBOLLM_CLOSE_ALL _OUT
   StrCpy ${_OUT} 1
   !ifndef BUILD_UNINSTALLER
@@ -112,6 +130,14 @@
         ${ExitFor}
       ${EndIf}
     ${Next}
+  ${EndIf}
+  ${If} ${_OUT} == 0
+    !insertmacro TURBOLLM_SETTLE ${_OUT}
+    ${If} ${_OUT} == 1
+      !insertmacro TURBOLLM_FORCE_CLOSE
+      Sleep ${TURBOLLM_POLL_MS}
+      !insertmacro TURBOLLM_IS_RUNNING ${_OUT}
+    ${EndIf}
   ${EndIf}
 !macroend
 

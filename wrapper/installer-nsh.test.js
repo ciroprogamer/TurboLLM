@@ -114,6 +114,47 @@ test('customCheckAppRunning writes the diagnostic before showing the dialog, not
   assert.ok(diagnosticIndex < messageBoxIndex, 'the diagnostic must be written before the Retry/Cancel dialog can be dismissed and the evidence lost')
 })
 
+test('TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS and TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS are defined, positive integers', () => {
+  for (const name of ['TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS', 'TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS']) {
+    const match = new RegExp(`^!define\\s+${name}\\s+(\\d+)\\s*$`, 'm').exec(code)
+    assert.ok(match, `installer.nsh must !define ${name} to a bounded integer`)
+    assert.ok(Number(match[1]) > 0, `${name} must be positive`)
+  }
+})
+
+test('TURBOLLM_INSTDIR_UNLOCKED tests the real operation the stock cleanup needs (a rename), not a process probe, and leaves $INSTDIR exactly as it found it', () => {
+  const body = macroBody(code, 'TURBOLLM_INSTDIR_UNLOCKED')
+  assert.ok(body, 'installer.nsh must define a TURBOLLM_INSTDIR_UNLOCKED _OUT macro')
+  assert.match(body, /Rename "\$INSTDIR" /, 'must attempt to rename $INSTDIR itself - the same all-or-nothing operation the old uninstaller needs, so a false negative is impossible')
+  assert.match(body, /Rename "\$INSTDIR\.[^"]+" "\$INSTDIR"/, 'a successful test-rename must be renamed straight back, or the install folder is left moved')
+  assert.match(body, /\$\{FileExists\}/, "a fresh install with no previous \\$INSTDIR must read as unlocked, not fail a rename of a folder that doesn't exist")
+  assertNoUnboundedControlFlow(body, 'TURBOLLM_INSTDIR_UNLOCKED')
+})
+
+test('TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR retries the rename test with backoff, bounded, reusing TURBOLLM_INSTDIR_UNLOCKED', () => {
+  const body = macroBody(code, 'TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR')
+  assert.ok(body, 'installer.nsh must define a TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR _OUT macro')
+  assert.match(body, /\$\{For\}\s+\$R\d\s+1\s+\$\{TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS\}/, 'the retry count must be bounded by TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS')
+  assert.match(body, /!insertmacro TURBOLLM_INSTDIR_UNLOCKED \$\{_OUT\}/, 'it must reuse TURBOLLM_INSTDIR_UNLOCKED, not duplicate the rename-test logic')
+  assert.match(body, /Sleep \$\{TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS\}/, 'a still-locked attempt must back off before the next one')
+  assert.match(body, /\$\{ExitFor\}/, 'an unlocked result must stop retrying instead of burning the whole budget')
+  assertNoUnboundedControlFlow(body, 'TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR')
+})
+
+test('customCheckAppRunning waits for the install folder to be unlocked before the stock cleanup step runs, in the installer only, and logs if it never clears', () => {
+  const body = macroBody(code, 'customCheckAppRunning')
+  assert.match(
+    body,
+    /!ifndef BUILD_UNINSTALLER[\s\S]*?!insertmacro TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR[\s\S]*?!endif/,
+    'the file-lock wait only matters before the installer hands off to uninstallOldVersion, which the uninstaller compile never calls'
+  )
+  const waitIndex = body.indexOf('TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR')
+  const clearInstdirIndex = body.lastIndexOf('TURBOLLM_CLEAR_INSTDIR')
+  const diagnosticIndex = body.indexOf('TURBOLLM_WRITE_DIAGNOSTIC', waitIndex)
+  assert.ok(diagnosticIndex >= 0 && diagnosticIndex > waitIndex, 'a still-locked result must be logged')
+  assert.ok(diagnosticIndex < clearInstdirIndex, 'the diagnostic must be written while $INSTDIR is still exported, before TURBOLLM_CLEAR_INSTDIR')
+})
+
 test('compiles clean under makensis -WX (installer mode)', (t) => {
   if (WINDOWS_ONLY.skip) return t.skip(WINDOWS_ONLY.skip)
   runCompileCheck(t, [])

@@ -24,6 +24,8 @@
 !define TURBOLLM_SETTLE_POLLS      2
 !define TURBOLLM_AUTO_RETRY_ATTEMPTS    5
 !define TURBOLLM_AUTO_RETRY_BACKOFF_MS  3000
+!define TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS    10
+!define TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS  3000
 ; nsExec's /TIMEOUT waits for output and restarts whenever output arrives. The commands below print
 ; next to nothing before they exit, which is what keeps each call bounded in practice.
 !define TURBOLLM_EXEC_TIMEOUT_MS   15000
@@ -180,6 +182,44 @@
   ${EndIf}
 !macroend
 
+; Whether TURBOLLM_IS_RUNNING found anything or not, this tests the operation electron-builder's
+; stock uninstallOldVersion actually needs to succeed: renaming the install folder in one shot,
+; which only works if nothing inside is open. A process disappearing from tasklist/WMI does not
+; mean Windows has released every handle - antivirus, an indexer, or a backup tool can hold a file
+; open with no process of its own left to find or close. ${_OUT} 1 means still locked; a successful
+; test-rename is renamed straight back immediately, so $INSTDIR is never left moved. A folder that
+; does not exist yet (a fresh install, no previous version) reads as unlocked.
+!macro TURBOLLM_INSTDIR_UNLOCKED _OUT
+  StrCpy ${_OUT} 1
+  ${If} ${FileExists} "$INSTDIR\*.*"
+    ClearErrors
+    Rename "$INSTDIR" "$INSTDIR.turbollm-locktest"
+    ${IfNot} ${Errors}
+      Rename "$INSTDIR.turbollm-locktest" "$INSTDIR"
+      StrCpy ${_OUT} 0
+    ${EndIf}
+  ${Else}
+    StrCpy ${_OUT} 0
+  ${EndIf}
+!macroend
+
+; electron-builder's stock uninstallOldVersion (installUtil.nsh, not overridable through
+; customCheckAppRunning) silently re-runs the previously installed version's own uninstaller to
+; clean up before this one copies in the new files. That uninstaller deletes by renaming everything
+; out of $INSTDIR first; if anything is still locked it fails, retries only 5 times about a second
+; apart, and shows this same "cannot be closed" text for a reason that was never about a running
+; process. Waiting out a real, longer backoff here - before that stock step ever runs - gives an
+; external lock (a scan of the files this installer just wrote) far more room to clear on its own.
+!macro TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR _OUT
+  ${For} $R4 1 ${TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS}
+    !insertmacro TURBOLLM_INSTDIR_UNLOCKED ${_OUT}
+    ${If} ${_OUT} == 0
+      ${ExitFor}
+    ${EndIf}
+    Sleep ${TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS}
+  ${Next}
+!macroend
+
 ; The hook electron-builder inserts instead of its own check, once per compile. There is no "TurboLLM
 ; is running" prompt: the installer closes it itself. Retry/Cancel appears only after the whole
 ; automatic retry budget has failed (for example a TurboLLM started as administrator), and Retry
@@ -221,6 +261,12 @@
         SetDetailsPrint lastused
       !endif
     ${EndIf}
+    !ifndef BUILD_UNINSTALLER
+      !insertmacro TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR $R0
+      ${If} $R0 == 1
+        !insertmacro TURBOLLM_WRITE_DIAGNOSTIC
+      ${EndIf}
+    !endif
     !insertmacro TURBOLLM_CLEAR_INSTDIR
   ${EndIf}
 !macroend

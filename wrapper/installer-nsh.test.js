@@ -3,12 +3,20 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { spawnSync } = require('node:child_process')
-const { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } = require('node:fs')
+const { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { join } = require('node:path')
+const { dirname, join } = require('node:path')
 
 const NSH_PATH = join(__dirname, 'build', 'installer.nsh')
 const STUB_NSI_PATH = join(__dirname, 'test-fixtures', 'installer-stub.nsi')
+const CLEAR_LONG_PATHS_STUB_PATH = join(__dirname, 'test-fixtures', 'clear-long-paths-stub.nsi')
+const MAX_PATH = 260
+// The deepest file the desktop package actually ships (a nested copy pi-coding-agent needs, on zod 3).
+const DEEPEST_PACKAGED_RELATIVE_PATH = [
+  'resources', 'daemon', 'node_modules', '@earendil-works', 'pi-coding-agent', 'node_modules', '@mistralai',
+  'mistralai', 'esm', 'models', 'operations',
+  'getchatcompletionfieldoptionscountsv1observabilitychatcompletionfieldsfieldnameoptionscountspost.js'
+]
 const TEMPLATE_INCLUDE_DIR = join(__dirname, 'node_modules', 'app-builder-lib', 'templates', 'nsis', 'include')
 const WINDOWS_ONLY = { skip: process.platform !== 'win32' && 'NSIS compiles only on Windows in this repo' }
 
@@ -114,45 +122,85 @@ test('customCheckAppRunning writes the diagnostic before showing the dialog, not
   assert.ok(diagnosticIndex < messageBoxIndex, 'the diagnostic must be written before the Retry/Cancel dialog can be dismissed and the evidence lost')
 })
 
-test('TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS and TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS are defined, positive integers', () => {
-  for (const name of ['TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS', 'TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS']) {
-    const match = new RegExp(`^!define\\s+${name}\\s+(\\d+)\\s*$`, 'm').exec(code)
-    assert.ok(match, `installer.nsh must !define ${name} to a bounded integer`)
-    assert.ok(Number(match[1]) > 0, `${name} must be positive`)
+test('TURBOLLM_CLEAR_LONG_PATHS deletes the daemon tree through a \\\\?\\ path, so files over MAX_PATH go too', () => {
+  const body = macroBody(code, 'TURBOLLM_CLEAR_LONG_PATHS')
+  assert.ok(body, 'installer.nsh must define a TURBOLLM_CLEAR_LONG_PATHS macro')
+  assert.match(
+    body,
+    /"\$CmdPath" \/C rd \/s \/q "\\\\\?\\\$INSTDIR\\resources\\daemon"/,
+    'rd needs the \\\\?\\ prefix: without it, it stops at the first path over MAX_PATH, which is the whole problem'
+  )
+  assertNoUnboundedControlFlow(body, 'TURBOLLM_CLEAR_LONG_PATHS')
+})
+
+test('TURBOLLM_CLEAR_LONG_PATHS only deletes a folder that is provably a TurboLLM install', () => {
+  const body = macroBody(code, 'TURBOLLM_CLEAR_LONG_PATHS')
+  const beforeDelete = body.slice(0, body.indexOf(' rd /s /q'))
+  assert.match(
+    beforeDelete,
+    /\$\{FileExists\} "\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}"/,
+    'the delete must be guarded by TurboLLM.exe being present, so a mistyped or shared install folder is never touched'
+  )
+  assert.match(beforeDelete, /\$\{FileExists\} "\$INSTDIR\\resources\\daemon\\\*\.\*"/, 'nothing to delete on a fresh install')
+})
+
+test('customCheckAppRunning clears long paths in the installer only, after closing TurboLLM, before the stock cleanup runs', () => {
+  const body = macroBody(code, 'customCheckAppRunning')
+  const clearIndex = body.indexOf('TURBOLLM_CLEAR_LONG_PATHS')
+  assert.ok(clearIndex >= 0, 'customCheckAppRunning must call TURBOLLM_CLEAR_LONG_PATHS')
+  assert.ok(clearIndex > body.indexOf('TURBOLLM_CLOSE_ALL_WITH_RETRIES'), 'processes must be closed first, or their files are still open')
+  assert.ok(clearIndex < body.lastIndexOf('TURBOLLM_CLEAR_INSTDIR'), 'must run inside the hook, before control returns to the stock install section')
+  const guardIndex = body.lastIndexOf('!ifndef BUILD_UNINSTALLER', clearIndex)
+  assert.ok(guardIndex >= 0, 'must sit inside !ifndef BUILD_UNINSTALLER')
+  assert.doesNotMatch(
+    body.slice(guardIndex, clearIndex),
+    /!endif/,
+    'installer compile only: the uninstaller never runs the stock old-version cleanup this is clearing the way for'
+  )
+})
+
+// With LongPathsEnabled=1 (common on dev boxes) rd copes even without \\?\, so the prefix is pinned by the static test above.
+test('running TURBOLLM_CLEAR_LONG_PATHS deletes a daemon tree holding a file over MAX_PATH, and nothing else', (t) => {
+  if (WINDOWS_ONLY.skip) return t.skip(WINDOWS_ONLY.skip)
+  const makensis = findMakensis()
+  if (!makensis) return t.skip('no cached electron-builder NSIS toolchain found (run `npm run package` once to populate it)')
+
+  const scratchDir = mkdtempSync(join(tmpdir(), 'turbollm-clear-long-paths-'))
+  try {
+    const installDir = join(scratchDir, 'install')
+    const overLimitFile = join(installDir, ...DEEPEST_PACKAGED_RELATIVE_PATH)
+    writeFiles([join(installDir, 'TurboLLM.exe'), join(installDir, 'resources', 'app.asar'), overLimitFile])
+    assert.ok(overLimitFile.length > MAX_PATH, `fixture must exceed MAX_PATH to prove anything (${overLimitFile.length} chars)`)
+
+    const stub = compileStub(makensis, CLEAR_LONG_PATHS_STUB_PATH, join(scratchDir, 'stub.exe'))
+    runStubAgainst(stub, installDir)
+
+    assert.equal(existsSync(join(installDir, 'resources', 'daemon')), false, 'the daemon tree must be gone, over-MAX_PATH file included')
+    assert.ok(existsSync(join(installDir, 'TurboLLM.exe')), 'files outside resources\\daemon must be left for the old uninstaller')
+    assert.ok(existsSync(join(installDir, 'resources', 'app.asar')), 'siblings of resources\\daemon must be left alone')
+  } finally {
+    rmSync(scratchDir, { recursive: true, force: true })
   }
 })
 
-test('TURBOLLM_INSTDIR_UNLOCKED tests the real operation the stock cleanup needs (a rename), not a process probe, and leaves $INSTDIR exactly as it found it', () => {
-  const body = macroBody(code, 'TURBOLLM_INSTDIR_UNLOCKED')
-  assert.ok(body, 'installer.nsh must define a TURBOLLM_INSTDIR_UNLOCKED _OUT macro')
-  assert.match(body, /Rename "\$INSTDIR" /, 'must attempt to rename $INSTDIR itself - the same all-or-nothing operation the old uninstaller needs, so a false negative is impossible')
-  assert.match(body, /Rename "\$INSTDIR\.[^"]+" "\$INSTDIR"/, 'a successful test-rename must be renamed straight back, or the install folder is left moved')
-  assert.match(body, /\$\{FileExists\}/, "a fresh install with no previous \\$INSTDIR must read as unlocked, not fail a rename of a folder that doesn't exist")
-  assertNoUnboundedControlFlow(body, 'TURBOLLM_INSTDIR_UNLOCKED')
-})
+test('running TURBOLLM_CLEAR_LONG_PATHS leaves a folder alone when it holds no TurboLLM.exe', (t) => {
+  if (WINDOWS_ONLY.skip) return t.skip(WINDOWS_ONLY.skip)
+  const makensis = findMakensis()
+  if (!makensis) return t.skip('no cached electron-builder NSIS toolchain found (run `npm run package` once to populate it)')
 
-test('TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR retries the rename test with backoff, bounded, reusing TURBOLLM_INSTDIR_UNLOCKED', () => {
-  const body = macroBody(code, 'TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR')
-  assert.ok(body, 'installer.nsh must define a TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR _OUT macro')
-  assert.match(body, /\$\{For\}\s+\$R\d\s+1\s+\$\{TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS\}/, 'the retry count must be bounded by TURBOLLM_FILE_LOCK_RETRY_ATTEMPTS')
-  assert.match(body, /!insertmacro TURBOLLM_INSTDIR_UNLOCKED \$\{_OUT\}/, 'it must reuse TURBOLLM_INSTDIR_UNLOCKED, not duplicate the rename-test logic')
-  assert.match(body, /Sleep \$\{TURBOLLM_FILE_LOCK_RETRY_BACKOFF_MS\}/, 'a still-locked attempt must back off before the next one')
-  assert.match(body, /\$\{ExitFor\}/, 'an unlocked result must stop retrying instead of burning the whole budget')
-  assertNoUnboundedControlFlow(body, 'TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR')
-})
+  const scratchDir = mkdtempSync(join(tmpdir(), 'turbollm-clear-long-paths-'))
+  try {
+    const unrelatedDir = join(scratchDir, 'not-turbollm')
+    const unrelatedFile = join(unrelatedDir, 'resources', 'daemon', 'keep.txt')
+    writeFiles([unrelatedFile])
 
-test('customCheckAppRunning waits for the install folder to be unlocked before the stock cleanup step runs, in the installer only, and logs if it never clears', () => {
-  const body = macroBody(code, 'customCheckAppRunning')
-  assert.match(
-    body,
-    /!ifndef BUILD_UNINSTALLER[\s\S]*?!insertmacro TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR[\s\S]*?!endif/,
-    'the file-lock wait only matters before the installer hands off to uninstallOldVersion, which the uninstaller compile never calls'
-  )
-  const waitIndex = body.indexOf('TURBOLLM_WAIT_FOR_UNLOCKED_INSTDIR')
-  const clearInstdirIndex = body.lastIndexOf('TURBOLLM_CLEAR_INSTDIR')
-  const diagnosticIndex = body.indexOf('TURBOLLM_WRITE_DIAGNOSTIC', waitIndex)
-  assert.ok(diagnosticIndex >= 0 && diagnosticIndex > waitIndex, 'a still-locked result must be logged')
-  assert.ok(diagnosticIndex < clearInstdirIndex, 'the diagnostic must be written while $INSTDIR is still exported, before TURBOLLM_CLEAR_INSTDIR')
+    const stub = compileStub(makensis, CLEAR_LONG_PATHS_STUB_PATH, join(scratchDir, 'stub.exe'))
+    runStubAgainst(stub, unrelatedDir)
+
+    assert.ok(existsSync(unrelatedFile), 'a mistyped or shared install folder must never be deleted from')
+  } finally {
+    rmSync(scratchDir, { recursive: true, force: true })
+  }
 })
 
 test('compiles clean under makensis -WX (installer mode)', (t) => {
@@ -185,6 +233,32 @@ function runCompileCheck (t, extraDefines) {
     assert.equal(result.status, 0, `makensis -WX failed:\n${result.stdout}\n${result.stderr}`)
   } finally {
     rmSync(scratchDir, { recursive: true, force: true })
+  }
+}
+
+function compileStub (makensis, stubPath, outFile) {
+  const result = spawnSync(makensis, [
+    '-WX',
+    '-INPUTCHARSET', 'UTF8',
+    `-DTPL=${TEMPLATE_INCLUDE_DIR}`,
+    `-DNSH=${NSH_PATH}`,
+    `-DOUT=${outFile}`,
+    stubPath
+  ], { encoding: 'utf8' })
+  assert.equal(result.status, 0, `makensis -WX failed:\n${result.stdout}\n${result.stderr}`)
+  return outFile
+}
+
+// NSIS reads /D= raw to the end of the command line, so it must not be quoted.
+function runStubAgainst (stub, installDir) {
+  const result = spawnSync(stub, [`/D=${installDir}`], { windowsVerbatimArguments: true, timeout: 60_000 })
+  assert.equal(result.status, 0, `the stub installer exited ${result.status}`)
+}
+
+function writeFiles (paths) {
+  for (const filePath of paths) {
+    mkdirSync(dirname(filePath), { recursive: true })
+    writeFileSync(filePath, 'x')
   }
 }
 

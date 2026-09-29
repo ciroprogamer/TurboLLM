@@ -3,7 +3,7 @@
 // fetch/Blob/anchor-download plumbing, mocked at the browser API boundary (fetch, URL.createObjectURL,
 // anchor.click), not the function's own logic.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { downloadCodeSessionExport } from './code-api'
+import { createCodeSession, downloadCodeSessionExport } from './code-api'
 import { ApiError } from './api'
 
 // jsdom doesn't implement localStorage's methods by default (authHeaders() reads it on every
@@ -23,6 +23,21 @@ beforeEach(() => {
   // download-trigger code path without either noise.
   vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock-url'), revokeObjectURL: vi.fn() })
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+})
+
+describe('createCodeSession', () => {
+  it('sends the session name the user chose as `title`, so the daemon keeps it', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ sessionId: 's1', convId: 'c1' }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createCodeSession({ repoRoot: '/work/repo', mode: 'auto', task: 'Fix the login bug', title: 'Login fix' })
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toMatchObject({ task: 'Fix the login bug', title: 'Login fix' })
+  })
 })
 
 describe('downloadCodeSessionExport', () => {

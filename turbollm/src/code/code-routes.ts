@@ -144,11 +144,12 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
   // ── create a session ─────────────────────────────────────────────────────────
   app.post('/api/v1/code/sessions', async (c) => {
     const b = await body<{
-      repoRoot?: string; repoBranch?: string; modelKey?: string; mode?: string; task?: string
+      repoRoot?: string; repoBranch?: string; modelKey?: string; mode?: string; task?: string; title?: unknown
       useWorktree?: boolean; worktreeBranch?: string; worktreeBase?: string; contextFiles?: string[]
     }>(c)
     const repoRoot = (b.repoRoot ?? '').trim()
     const task = (b.task ?? '').trim()
+    const chosenTitle = typeof b.title === 'string' ? b.title.trim() : ''
     const mode = (b.mode ?? 'auto') as CodeMode
     if (!repoRoot) return err(c, 400, 'invalid_input', 'repoRoot is required.')
     if (!task) return err(c, 400, 'invalid_input', 'A task description is required.')
@@ -183,7 +184,7 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
     const codeAgent = d.store.snapshot().code.defaultAgent
     const run = db.createAgentRun({
       convId: conv.id,
-      title: task.slice(0, 60),
+      title: chosenTitle || task.slice(0, 60),
       allowedTools: [],
       repoRoot,
       repoBranch: b.repoBranch,
@@ -196,6 +197,9 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
       worktreePath,
       codeAgent,
     })
+    // A name the user chose is theirs: switch off the one-time auto-generated title, or the first
+    // successful turn would replace it (code-run-manager.ts, gated on titleAutoSynced).
+    if (chosenTitle) db.updateAgentRun(run.id, { titleAutoSynced: true })
     // Seed the task as the first user message so re-opening the session shows it. Any attached
     // context-file paths are stored as textAttachments (shown as chips) — POST /messages folds
     // them into the actual prompt when this seeded task's turn runs (see contextFilesBlock).

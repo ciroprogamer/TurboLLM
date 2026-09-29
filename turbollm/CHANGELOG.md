@@ -23,7 +23,20 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **Windows: updating TurboLLM no longer stops at "TurboLLM cannot be closed"** (GitHub #250). An update removes the
+  old version by first moving its files into a temporary folder, and a few files deep inside the bundled daemon ended
+  up with paths longer than Windows' 260-character limit there. The move failed on the same file every time, so the
+  update stopped even with nothing running, and Retry could never help. The installer now deletes that folder first,
+  with a delete that works past the limit; the update installs a fresh copy. A few files in the new version are still
+  that deep, so the file-copy step can still show the same message once; Retry there goes through.
+
+### Changed
+
+- **Windows installer: a running TurboLLM gets about a minute to close**, retried automatically, before the installer
+  asks you to close it. If it still can't, what the installer found running is written to
+  `%TEMP%\TurboLLM-installer-diagnostic.log`.
 
 ## [1.14.2] - 2026-09-27
 

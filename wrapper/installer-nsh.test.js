@@ -84,17 +84,24 @@ test('customCheckAppRunning gives every attempt (automatic and manual Retry) the
   )
 })
 
-test('TURBOLLM_WRITE_DIAGNOSTIC exists, is gated on PowerShell, and never throws out of the install', () => {
+test('TURBOLLM_WRITE_DIAGNOSTIC dumps the full task list unconditionally, not gated on PowerShell', () => {
   const body = macroBody(code, 'TURBOLLM_WRITE_DIAGNOSTIC')
   assert.ok(body, 'installer.nsh must define a TURBOLLM_WRITE_DIAGNOSTIC macro')
-  assert.match(body, /\$\{If\}\s+\$IsPowerShellAvailable\s+==\s+0/, 'the diagnostic dump must be gated on PowerShell being available, like the other path-based checks')
-  assert.match(body, /try \{[\s\S]*\} catch \{\}/, 'the PowerShell script must swallow its own errors so a broken diagnostic never blocks the install')
+
+  const beforeFirstGate = body.slice(0, body.search(/\$\{If\}/))
+  assert.match(
+    beforeFirstGate,
+    /"\$CmdPath" \/C tasklist \/V/,
+    'a plain cmd.exe tasklist dump must run unconditionally, before any ${If} gate - a diagnostic gated on the same ' +
+    'PowerShell-availability check the real probe depends on could go silent for exactly the failures most worth seeing'
+  )
   assertNoUnboundedControlFlow(body, 'TURBOLLM_WRITE_DIAGNOSTIC')
 })
 
-test('the diagnostic log reports both probes TURBOLLM_IS_RUNNING actually uses, by name and by install-folder path', () => {
+test('TURBOLLM_WRITE_DIAGNOSTIC also reports the install-folder path probe when PowerShell is available, and never throws out of the install', () => {
   const body = macroBody(code, 'TURBOLLM_WRITE_DIAGNOSTIC')
-  assert.match(body, /Get-Process -Name 'TurboLLM'/, 'must report anything found by the name-based probe')
+  assert.match(body, /\$\{If\}\s+\$IsPowerShellAvailable\s+==\s+0/, 'the path-based enrichment must be gated on PowerShell being available, like TURBOLLM_IS_RUNNING itself')
+  assert.match(body, /try \{[\s\S]*\} catch \{\}/, 'the PowerShell script must swallow its own errors so a broken diagnostic never blocks the install')
   assert.match(body, /Get-CimInstance -ClassName Win32_Process/, 'must report anything found by the install-folder path-based probe')
   assert.match(body, /\.ProcessId -ne \$turbollmSelfPid/, "must exclude the installer's own PID, matching TURBOLLM_IS_RUNNING's own filter")
 })

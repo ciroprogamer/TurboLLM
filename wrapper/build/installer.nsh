@@ -159,16 +159,23 @@
   ${Next}
 !macroend
 
-; If the whole automatic retry budget still failed, drop a plain diagnostic log naming exactly what
-; the two TURBOLLM_IS_RUNNING probes find (or don't find) at that moment, so a stuck close can be
-; read from a log instead of guessed at. Written only on the way to the Retry/Cancel dialog, so the
-; common case - nothing ever gets stuck - never touches disk. Plain English, not a LangString: a
-; technical artifact for debugging, not translated UI text, so it carries none of -WX's 26-language
-; cost. Best-effort: any error in the script is swallowed, since a broken diagnostic must never be
-; the reason an install fails.
+; If the whole automatic retry budget still failed, drop a plain diagnostic log naming what is
+; running at that moment, so a stuck close can be read from a log instead of guessed at. Written
+; only on the way to the Retry/Cancel dialog, so the common case - nothing ever gets stuck - never
+; touches disk. The first dump needs only cmd.exe and always runs: a diagnostic gated on the same
+; PowerShell-availability check the real probe depends on could stay silent for exactly the case
+; most worth seeing. A second, path-aware dump runs only when PowerShell is available, since it can
+; see what TURBOLLM_IS_RUNNING's install-folder probe sees and a plain tasklist cannot. Plain
+; English, not a LangString: a technical artifact for debugging, not translated UI text, so it
+; carries none of -WX's 26-language cost. Best-effort throughout: every error is swallowed or
+; ignored, since a broken diagnostic must never be the reason an install fails.
 !macro TURBOLLM_WRITE_DIAGNOSTIC
+  nsExec::Exec /TIMEOUT=${TURBOLLM_EXEC_TIMEOUT_MS} `"$CmdPath" /C echo TurboLLM installer: still detected as running after the automatic retry budget >> "%TEMP%\TurboLLM-installer-diagnostic.log"`
+  Pop $R2
+  nsExec::Exec /TIMEOUT=${TURBOLLM_EXEC_TIMEOUT_MS} `"$CmdPath" /C tasklist /V >> "%TEMP%\TurboLLM-installer-diagnostic.log"`
+  Pop $R2
   ${If} $IsPowerShellAvailable == 0
-    nsExec::Exec /TIMEOUT=${TURBOLLM_EXEC_TIMEOUT_MS} `"$PowerShellPath" -NoProfile -NonInteractive -Command "try { $$d = $$env:TURBOLLM_SETUP_INSTDIR.TrimEnd('\') + '\'; $$log = @((Get-Date).ToString('o') + '  still detected as running after the automatic retry budget'); Get-Process -Name 'TurboLLM' -ErrorAction SilentlyContinue | ForEach-Object { $$log += '  by name: pid=' + $$_.Id + ' path=' + $$_.Path }; Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object { $$_.ExecutablePath -and $$_.ProcessId -ne $turbollmSelfPid -and $$_.ExecutablePath.StartsWith($$d, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $$log += '  under install folder: pid=' + $$_.ProcessId + ' path=' + $$_.ExecutablePath + ' cmd=' + $$_.CommandLine }; $$log -join [Environment]::NewLine | Out-File -FilePath ($$env:TEMP + '\TurboLLM-installer-diagnostic.log') -Append -Encoding utf8 } catch {}"`
+    nsExec::Exec /TIMEOUT=${TURBOLLM_EXEC_TIMEOUT_MS} `"$PowerShellPath" -NoProfile -NonInteractive -Command "try { $$d = $$env:TURBOLLM_SETUP_INSTDIR.TrimEnd('\') + '\'; $$log = @('install-folder probe:'); Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object { $$_.ExecutablePath -and $$_.ProcessId -ne $turbollmSelfPid -and $$_.ExecutablePath.StartsWith($$d, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $$log += '  under install folder: pid=' + $$_.ProcessId + ' path=' + $$_.ExecutablePath + ' cmd=' + $$_.CommandLine }; if ($$log.Count -eq 1) { $$log += '  (nothing found under the install folder)' }; $$log -join [Environment]::NewLine | Out-File -FilePath ($$env:TEMP + '\TurboLLM-installer-diagnostic.log') -Append -Encoding utf8 } catch {}"`
     Pop $R2
   ${EndIf}
 !macroend

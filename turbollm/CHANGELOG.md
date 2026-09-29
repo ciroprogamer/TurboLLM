@@ -23,6 +23,16 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
+### Added
+
+- **Find in chat** (GitHub #52). Press Ctrl/Cmd+F in a chat, or use the new search button in its header, to search
+  that conversation. It shows "3 of 17", Enter or the arrows jump between matches, and Esc closes it. Matches are
+  highlighted in place, new text that streams in is picked up, and it works on phones through the button. It searches
+  what is on screen, so open a collapsed thinking block to search inside it.
+- **Name a Code session when you start it.** The launchpad has an optional "Session name" field. A name you give is
+  kept: the automatically generated title no longer replaces it after the first reply. Leave it empty and the session
+  is named after your task as before.
+
 ### Fixed
 
 - **Windows: updating TurboLLM no longer stops at "TurboLLM cannot be closed"** (GitHub #250). An update removes the
@@ -34,6 +44,9 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ### Changed
 
+- **An open thinking block now grows with the reasoning** instead of scrolling inside a small fixed box, so a fast
+  model's reasoning can be skimmed as it streams. It still starts collapsed, and the "hide thinking" setting is
+  unchanged.
 - **Windows installer: a running TurboLLM gets about a minute to close**, retried automatically, before the installer
   asks you to close it. If it still can't, what the installer found running is written to
   `%TEMP%\TurboLLM-installer-diagnostic.log`.

@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { ArrowDown, Copy, Download, Loader2, PanelLeft, Paperclip, SendHorizontal, Share2, Shrink, SlidersHorizontal, Square, UserRound, X } from 'lucide-react'
+import { ArrowDown, Copy, Download, Loader2, PanelLeft, Paperclip, Search, SendHorizontal, Share2, Shrink, SlidersHorizontal, Square, UserRound, X } from 'lucide-react'
 import { continueConversation, fetchSysInfo, listMemoryFacts, sendMessage } from '../lib/chat-api'
 import { extractPdfText } from '../lib/pdf-extract'
 import { chatKeys, useConversation, useConversationMutations } from '../lib/chat-queries'
@@ -29,6 +29,7 @@ import { MessageBubble, StreamingBubble } from './chat/MessageBubble'
 import { ToolApprovalBar } from './chat/ToolApprovalBar'
 import { ContextMeter } from './chat/ContextMeter'
 import { CompactionDivider } from './chat/CompactionDivider'
+import { ChatFindBar } from './chat/ChatFindBar'
 import { ConversationSidebar } from './chat/ConversationSidebar'
 import { readSavedSidebarWidth, SIDEBAR_MIN_W, sidebarMaxW, SidebarResizeHandle } from './chat/SidebarResizeHandle'
 import { ModelLoadMenu } from '../components/ModelLoadMenu'
@@ -122,6 +123,12 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
   const [editingId, setEditingId] = useState<string | null>(null)
   const [settingsKey, setSettingsKey] = useState<string | null>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const [findOpen, setFindOpen] = useState(false)
+  const [findFocusRequest, setFindFocusRequest] = useState(0)
+  const openFind = () => {
+    setFindOpen(true)
+    setFindFocusRequest((request) => request + 1)
+  }
   const [sidebarOpen, setSidebarOpen] = useWorkspaceSidebarOpen()
   // Below md the sidebar is an off-canvas drawer, hidden until opened from the header.
   const isDesktop = useIsDesktop()
@@ -478,14 +485,20 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, conv?.id])
 
-  // Ctrl+N new chat, Esc stop. Whitelist ONLY these exact combos and preventDefault
-  // solely for the one we handle (Ctrl/Cmd+N) — never for anything else, so native
-  // shortcuts like Ctrl/Cmd+C (copy) are left untouched.
+  // Ctrl+N new chat, Ctrl+F find in chat, Esc stop. Whitelist ONLY these exact combos and
+  // preventDefault solely for the ones we handle (Ctrl/Cmd+N, and Ctrl/Cmd+F while a chat is
+  // open) — never for anything else, so native shortcuts like Ctrl/Cmd+C (copy) are left
+  // untouched, and the browser's own find still works where there is no chat to search.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'N')) {
         e.preventDefault()
         handleNew()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F') && activeId) {
+        e.preventDefault()
+        openFind()
         return
       }
       if (e.key === 'Escape' && activeId && liveByConv[activeId]) { void handleStop() }
@@ -1184,7 +1197,14 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          {activeId && (
+            <Button size="icon" variant="ghost" className="h-8 w-8" title="Find in chat (Ctrl+F)" aria-label="Find in chat" onClick={openFind}>
+              <Search size={15} />
+            </Button>
+          )}
         </div>
+
+        {findOpen && <ChatFindBar scrollerRef={scrollerRef} focusRequest={findFocusRequest} onClose={() => setFindOpen(false)} />}
 
         {/* Message list — always visible; empty state shown only when no messages */}
         <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">

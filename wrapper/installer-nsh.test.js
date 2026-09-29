@@ -51,6 +51,39 @@ test('the settle step only runs once the close already looks successful', () => 
   assert.ok(lastCondition, 'TURBOLLM_SETTLE must be reached only inside a ${_OUT} == 0 branch (settle guards success, not failure)')
 })
 
+test('TURBOLLM_AUTO_RETRY_ATTEMPTS and TURBOLLM_AUTO_RETRY_BACKOFF_MS are defined, positive integers', () => {
+  for (const name of ['TURBOLLM_AUTO_RETRY_ATTEMPTS', 'TURBOLLM_AUTO_RETRY_BACKOFF_MS']) {
+    const match = new RegExp(`^!define\\s+${name}\\s+(\\d+)\\s*$`, 'm').exec(code)
+    assert.ok(match, `installer.nsh must !define ${name} to a bounded integer`)
+    assert.ok(Number(match[1]) > 0, `${name} must be positive`)
+  }
+})
+
+test('TURBOLLM_CLOSE_ALL_WITH_RETRIES retries the whole close-and-settle cycle with a real backoff, bounded', () => {
+  const body = macroBody(code, 'TURBOLLM_CLOSE_ALL_WITH_RETRIES')
+  assert.ok(body, 'installer.nsh must define a TURBOLLM_CLOSE_ALL_WITH_RETRIES _OUT macro')
+  assert.match(body, /\$\{For\}\s+\$R\d\s+1\s+\$\{TURBOLLM_AUTO_RETRY_ATTEMPTS\}/, 'the retry count must be bounded by TURBOLLM_AUTO_RETRY_ATTEMPTS')
+  assert.match(body, /!insertmacro TURBOLLM_CLOSE_ALL \$\{_OUT\}/, 'it must reuse TURBOLLM_CLOSE_ALL, not duplicate the close/settle logic')
+  assert.match(body, /Sleep \$\{TURBOLLM_AUTO_RETRY_BACKOFF_MS\}/, 'a failed attempt must back off before the next one, not spin immediately')
+  assert.match(body, /\$\{ExitFor\}/, 'a successful attempt must stop retrying instead of burning the whole budget')
+  assertNoUnboundedControlFlow(body, 'TURBOLLM_CLOSE_ALL_WITH_RETRIES')
+})
+
+test('customCheckAppRunning gives every attempt (automatic and manual Retry) the full retry budget, not one quick shot', () => {
+  const body = macroBody(code, 'customCheckAppRunning')
+  assert.ok(body, 'installer.nsh must define customCheckAppRunning')
+  assert.match(
+    body,
+    /!insertmacro TURBOLLM_CLOSE_ALL_WITH_RETRIES \$R0/,
+    'customCheckAppRunning must call the retrying wrapper so a manual Retry click also gets the full budget, not a single TURBOLLM_CLOSE_ALL attempt'
+  )
+  assert.doesNotMatch(
+    body,
+    /!insertmacro TURBOLLM_CLOSE_ALL \$R0/,
+    'customCheckAppRunning must not call the bare single-attempt TURBOLLM_CLOSE_ALL directly'
+  )
+})
+
 test('compiles clean under makensis -WX (installer mode)', (t) => {
   if (WINDOWS_ONLY.skip) return t.skip(WINDOWS_ONLY.skip)
   runCompileCheck(t, [])

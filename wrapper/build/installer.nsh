@@ -22,6 +22,8 @@
 !define TURBOLLM_GRACE_POLLS       3
 !define TURBOLLM_FORCE_ATTEMPTS    3
 !define TURBOLLM_SETTLE_POLLS      2
+!define TURBOLLM_AUTO_RETRY_ATTEMPTS    5
+!define TURBOLLM_AUTO_RETRY_BACKOFF_MS  3000
 ; nsExec's /TIMEOUT waits for output and restarts whenever output arrives. The commands below print
 ; next to nothing before they exit, which is what keeps each call bounded in practice.
 !define TURBOLLM_EXEC_TIMEOUT_MS   15000
@@ -141,10 +143,27 @@
   ${EndIf}
 !macroend
 
+; A single TURBOLLM_CLOSE_ALL budget (a few seconds) can lose to something slower than a normal
+; shutdown - a real-time antivirus scan of the freshly-written files, a slow-releasing GPU/driver
+; handle, Explorer or an indexer briefly opening a new executable. Retrying the whole
+; close-then-settle cycle several times with a real backoff clears most of those automatically,
+; well before anyone would need to look at a dialog. A manual Retry click gets this same full
+; budget, not a single quick attempt, since it calls this wrapper too (customCheckAppRunning below).
+!macro TURBOLLM_CLOSE_ALL_WITH_RETRIES _OUT
+  ${For} $R3 1 ${TURBOLLM_AUTO_RETRY_ATTEMPTS}
+    !insertmacro TURBOLLM_CLOSE_ALL ${_OUT}
+    ${If} ${_OUT} == 0
+      ${ExitFor}
+    ${EndIf}
+    Sleep ${TURBOLLM_AUTO_RETRY_BACKOFF_MS}
+  ${Next}
+!macroend
+
 ; The hook electron-builder inserts instead of its own check, once per compile. There is no "TurboLLM
-; is running" prompt: the installer closes it itself. Retry/Cancel appears only after a whole automatic
-; attempt has failed (for example a TurboLLM started as administrator), and Retry runs that whole
-; attempt again. The marker is printed at compile time only, so the build log proves the insertion.
+; is running" prompt: the installer closes it itself. Retry/Cancel appears only after the whole
+; automatic retry budget has failed (for example a TurboLLM started as administrator), and Retry
+; runs that whole budget again. The marker is printed at compile time only, so the build log proves
+; the insertion.
 !macro customCheckAppRunning
   !verbose push
   !verbose 4
@@ -166,7 +185,7 @@
         SetDetailsPrint lastused
       !endif
       ${Do}
-        !insertmacro TURBOLLM_CLOSE_ALL $R0
+        !insertmacro TURBOLLM_CLOSE_ALL_WITH_RETRIES $R0
         ${If} $R0 == 0
           ${ExitDo}
         ${EndIf}

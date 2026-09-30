@@ -30,9 +30,11 @@ _Nothing yet._
 ### Added
 
 - **Find in chat** (GitHub #52). Press Ctrl/Cmd+F in a chat, or use the new search button in its header, to search
-  that conversation. It shows "3 of 17", Enter or the arrows jump between matches, and Esc closes it. Matches are
-  highlighted in place, new text that streams in is picked up, and it works on phones through the button. It searches
-  what is on screen, so open a collapsed thinking block to search inside it.
+  that conversation. It shows "3 of 17", Enter (Shift+Enter goes back) or the up and down buttons jump between
+  matches, and Esc closes it. Matches are highlighted in place, phrases are found even where the text is bold, code or
+  otherwise formatted, new text that streams in is picked up, and it works on phones through the button. It searches
+  what is on screen, so open a collapsed thinking block to search inside it. A very common search counts up to 10,000
+  matches ("1 of 10000+").
 - **Name a Code session when you start it.** The launchpad has an optional "Session name" field. A name you give is
   kept: the automatically generated title no longer replaces it after the first reply. Leave it empty and the session
   is named after your task as before.
@@ -55,13 +57,15 @@ _Nothing yet._
   update stopped even with nothing running, and Retry could never help. The installer now deletes that folder first,
   with a delete that works past the limit; the update installs a fresh copy. A few files in the new version are still
   that deep, so the file-copy step can still show the same message once; Retry there goes through.
+- **Renaming a Code session before its first reply finishes now keeps your name.** The automatically generated title
+  used to replace it when that first reply completed. Names are also kept to one line of at most 120 characters.
 
 ### Discord
 
 - **Windows update fix.** Updating TurboLLM no longer stops at "TurboLLM cannot be closed" when nothing is running. The
   cause was over-long file paths inside the old install; the installer now clears them first.
-- **Search inside a chat.** Press Ctrl/Cmd+F (or the new search button in the chat header), and Enter or the arrows
-  jump to each match.
+- **Search inside a chat.** Press Ctrl/Cmd+F (or the new search button in the chat header), and Enter or the up and
+  down buttons jump to each match.
 - **Thinking blocks are resizable.** Drag one's bottom edge to the size you like and every thinking block remembers it.
 - **Name a Code session when you start it.** The launchpad has an optional "Session name" field, and a name you give
   is kept.

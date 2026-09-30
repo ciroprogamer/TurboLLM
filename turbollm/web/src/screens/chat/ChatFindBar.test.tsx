@@ -256,6 +256,15 @@ describe('ChatFindBar', () => {
     window.removeEventListener('keydown', windowKeyDown)
   })
 
+  it('does not close when Escape only cancels an input-method composition', () => {
+    const onClose = vi.fn()
+    render(<Harness onClose={onClose} />)
+
+    fireEvent.keyDown(findInput(), { key: 'Escape', isComposing: true })
+
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('does not jump to the next match when Enter only confirms an input-method composition', () => {
     render(<Harness />)
     search('cat')
@@ -313,6 +322,33 @@ describe('ChatFindBar', () => {
       await streamAMatchEvery(50, 10)
 
       expect(total()).toBeGreaterThan(3)
+    })
+
+    it('keeps stepping through matches in the very text that is streaming in, without falling back', async () => {
+      vi.useFakeTimers()
+      render(<Harness html="<p>cat one. cat two. cat three. cat four</p>" />)
+      search('cat')
+      const streaming = screen.getByTestId('scroller').querySelector('p')!.firstChild as Text
+      // React streams a reply by replacing the text node's value, not by adding a node.
+      const streamAWord = async () => {
+        await act(async () => {
+          streaming.nodeValue = `${streaming.data} word`
+          await vi.advanceTimersByTimeAsync(200)
+        })
+      }
+
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      expect(count()).toBe('3 of 4')
+      await streamAWord()
+      expect(count()).toBe('3 of 4')
+
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      await streamAWord()
+      expect(count()).toBe('4 of 4')
+
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      expect(count()).toBe('1 of 4')
     })
 
     it('stays on the same match when text arrives above it', async () => {

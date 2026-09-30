@@ -1,8 +1,8 @@
 // GitHub #52 (b15hop): find text inside a long chat. These are the pure DOM pieces behind the find
 // bar — matching text in a rendered message list, and painting the matches with the browser's
 // CSS Custom Highlight API (which never touches the markdown DOM, unlike wrapping matches in <mark>).
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearFindHighlights, findTextRanges, MAX_FIND_MATCHES, paintFindHighlights, scrollMatchIntoView } from './chat-find'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearFindHighlights, findTextRanges, liveRangeOf, MAX_FIND_MATCHES, paintFindHighlights, scrollMatchIntoView } from './chat-find'
 
 function messageList(html: string): HTMLElement {
   const root = document.createElement('div')
@@ -11,7 +11,7 @@ function messageList(html: string): HTMLElement {
   return root
 }
 
-const texts = (ranges: Range[]) => ranges.map((r) => r.toString())
+const texts = (ranges: AbstractRange[]) => ranges.map((r) => liveRangeOf(r)?.toString())
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -79,6 +79,32 @@ describe('findTextRanges', () => {
     expect(findTextRanges(root, 'cat')).toHaveLength(1)
   })
 
+  // React streams a reply by replacing a text node's value. A live Range in that node collapses to
+  // its start when that happens, which lost the reader's place in the reply and made every refresh of
+  // a long chat cost more, because the browser keeps every live Range up to date. So matches are fixed
+  // positions, and a live Range is made only when one is needed (to scroll, to compare).
+  it('returns fixed positions, which stay put when a streaming text node has its value replaced', () => {
+    const root = messageList('<p>cat one. cat two.</p>')
+    const [, second] = findTextRanges(root, 'cat')
+    const textNode = second.startContainer as Text
+    const startedAt = second.startOffset
+
+    textNode.nodeValue = 'cat one. cat two. and now a great deal more streamed text'
+
+    expect(second.startContainer).toBe(textNode)
+    expect(second.startOffset).toBe(startedAt)
+  })
+
+  it('makes a live range from a match only on request, and not for one whose text has gone', () => {
+    const root = messageList('<p>find me</p>')
+    const [match] = findTextRanges(root, 'me')
+    expect(liveRangeOf(match)?.toString()).toBe('me')
+
+    root.remove()
+
+    expect(liveRangeOf(match)).toBeNull()
+  })
+
   it('stops at a limit, so a one-letter search in a huge chat cannot make tens of thousands of ranges', () => {
     const root = messageList(`<p>${'e'.repeat(MAX_FIND_MATCHES + 500)}</p>`)
 
@@ -94,7 +120,7 @@ describe('findTextRanges across formatting', () => {
 
     const [match] = findTextRanges(root, 'const x')
 
-    expect(match.toString()).toBe('const x')
+    expect(liveRangeOf(match)?.toString()).toBe('const x')
   })
 
   it('finds a phrase that runs into bold text', () => {
@@ -117,6 +143,13 @@ describe('findTextRanges across formatting', () => {
     expect(findTextRanges(root, 'ab')).toEqual([])
   })
 
+  it('does not join text on either side of a line break', () => {
+    const root = messageList('<p>line one<br>line two</p>')
+
+    expect(findTextRanges(root, 'oneline')).toEqual([])
+    expect(texts(findTextRanges(root, 'line'))).toEqual(['line', 'line'])
+  })
+
   it('still finds several matches, in order, when they sit in different pieces', () => {
     const root = messageList('<p>cat <em>cat</em> cat</p><p>cat</p>')
 
@@ -126,9 +159,23 @@ describe('findTextRanges across formatting', () => {
 
 // jsdom has no layout, so positions are stated: a match sits `characterOffset * 10` px below the top
 // of the page, and the scroll area starts 100px down, is 400px tall and is scrolled to 300px.
-function layOut(match: Range, top: number, across: { left: number; width: number } = { left: 0, width: 0 }) {
-  match.getBoundingClientRect = () => ({ top, height: 20, bottom: top + 20, left: across.left, right: across.left + across.width, width: across.width, x: across.left, y: top, toJSON: () => ({}) })
+const stated = new WeakMap<Node, Map<number, DOMRect>>()
+const ON_NO_SCREEN = { top: 0, height: 0, bottom: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+
+function layOut(match: AbstractRange, top: number, across: { left: number; width: number } = { left: 0, width: 0 }, height = 20) {
+  const box = { top, height, bottom: top + height, left: across.left, right: across.left + across.width, width: across.width, x: across.left, y: top, toJSON: () => ({}) } as DOMRect
+  const byOffset = stated.get(match.startContainer) ?? new Map<number, DOMRect>()
+  byOffset.set(match.startOffset, box)
+  stated.set(match.startContainer, byOffset)
 }
+
+beforeEach(() => {
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    writable: true,
+    value(this: Range) { return stated.get(this.startContainer)?.get(this.startOffset) ?? ON_NO_SCREEN },
+  })
+})
 
 /** A box inside the chat that scrolls on its own (a thinking block, a code block, tool output). */
 function innerScrollBox(element: HTMLElement, box: { top: number; height: number; left: number; width: number }, content: { height: number; width: number }, overflow: 'auto' | 'visible' = 'auto') {
@@ -247,7 +294,7 @@ describe('scrollMatchIntoView', () => {
   it('does not scroll to a match that has no position on screen', () => {
     const root = messageList('<p>find me here</p>')
     const [match] = findTextRanges(root, 'me')
-    match.getBoundingClientRect = () => ({ top: 0, height: 0, bottom: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) })
+    layOut(match, 0, { left: 0, width: 0 }, 0)
     const { scroller, scrollTo } = scrollAreaAt(300)
 
     scrollMatchIntoView(match, scroller)
@@ -293,7 +340,7 @@ describe('paintFindHighlights', () => {
     const registry = stubHighlightApi()
     const root = messageList('<p>ab</p>')
     const oneMatch = findTextRanges(root, 'ab')[0]
-    const ranges = Array.from({ length: 70_000 }, () => oneMatch.cloneRange())
+    const ranges = Array.from({ length: 70_000 }, () => new StaticRange({ startContainer: oneMatch.startContainer, startOffset: oneMatch.startOffset, endContainer: oneMatch.endContainer, endOffset: oneMatch.endOffset }))
 
     expect(() => paintFindHighlights(ranges, 0)).not.toThrow()
 

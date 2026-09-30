@@ -3,7 +3,7 @@
 // (its own model-list logic) with the data hooks and heavy children stubbed at their boundary —
 // the same "mock at the API boundary, keep the screen's own logic real" discipline as
 // CodeSessionScreen.test.tsx.
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -187,6 +187,21 @@ describe('ChatScreen — find in chat', () => {
 
       pressFindShortcut({ key: 'f', metaKey: true })
       await findBoxAppears()
+    } finally {
+      platform.mockRestore()
+    }
+  })
+
+  it('names the shortcut that works on this computer in the header button tooltip', async () => {
+    await renderOpenConversation()
+    expect(screen.getByRole('button', { name: /find in chat/i }).getAttribute('title')).toBe('Find in chat (Ctrl+F)')
+    cleanup()
+
+    const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    try {
+      await renderOpenConversation()
+
+      expect(screen.getByRole('button', { name: /find in chat/i }).getAttribute('title')).toBe('Find in chat (⌘F)')
     } finally {
       platform.mockRestore()
     }

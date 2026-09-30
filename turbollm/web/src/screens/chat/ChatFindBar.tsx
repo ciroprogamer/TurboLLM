@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
 import { Button } from '../../components/ui/button'
-import { clearFindHighlights, findTextRanges, MAX_FIND_MATCHES, paintFindHighlights, scrollMatchIntoView } from '../../lib/chat-find'
+import { clearFindHighlights, findTextRanges, liveRangeOf, MAX_FIND_MATCHES, paintFindHighlights, scrollMatchIntoView } from '../../lib/chat-find'
 
 const STREAMING_REFRESH_DELAY_MS = 150
 
@@ -30,7 +30,7 @@ export function ChatFindBar({ scrollerRef, focusRequest, onClose, onReveal }: Ch
 
   // On the whole bar, not just the input: after clicking Next or Close the focus is on a button.
   const handleBarKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape') return
+    if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
     event.stopPropagation()
     onClose()
   }
@@ -77,12 +77,12 @@ function describeMatches(query: string, matchCount: number, currentIndex: number
 
 function useChatFind(scrollerRef: RefObject<HTMLElement | null>, onReveal: (() => void) | undefined) {
   const [query, setQuery] = useState('')
-  const [matches, setMatches] = useState<Range[]>([])
+  const [matches, setMatches] = useState<StaticRange[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const latestQuery = useRef('')
-  const currentMatch = useRef<Range | undefined>(undefined)
+  const currentMatch = useRef<StaticRange | undefined>(undefined)
 
-  const reveal = (match: Range | undefined) => {
+  const reveal = (match: StaticRange | undefined) => {
     const scroller = scrollerRef.current
     if (!match || !scroller) return
     onReveal?.()
@@ -119,17 +119,26 @@ function useChatFind(scrollerRef: RefObject<HTMLElement | null>, onReveal: (() =
   return { query, matches, currentIndex, search, step }
 }
 
-function findMatches(scrollerRef: RefObject<HTMLElement | null>, query: string): Range[] {
+function findMatches(scrollerRef: RefObject<HTMLElement | null>, query: string): StaticRange[] {
   const scroller = scrollerRef.current
   return scroller ? findTextRanges(scroller, query) : []
 }
 
 // After the chat changes, stay on the match the reader was on (or the next one after it), not on the
 // same number: new text above it shifts every number, and the highlight would silently move elsewhere.
-function indexOfMatchAtOrAfter(found: Range[], previous: Range | undefined): number {
-  if (!previous || !previous.startContainer.isConnected) return 0
-  const index = found.findIndex((match) => previous.compareBoundaryPoints(Range.START_TO_START, match) <= 0)
-  return index === -1 ? Math.max(found.length - 1, 0) : index
+function indexOfMatchAtOrAfter(found: StaticRange[], previous: StaticRange | undefined): number {
+  const where = previous && liveRangeOf(previous)
+  if (!where) return 0
+  where.collapse(true)
+  // Matches are in document order, so the first one starting at or after this point is found by halving.
+  let low = 0
+  let high = found.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (where.comparePoint(found[middle].startContainer, found[middle].startOffset) >= 0) high = middle
+    else low = middle + 1
+  }
+  return low === found.length ? Math.max(found.length - 1, 0) : low
 }
 
 // New text keeps arriving while a reply streams, so the matches are refreshed as the chat changes.
@@ -138,7 +147,7 @@ function indexOfMatchAtOrAfter(found: Range[], previous: Range | undefined): num
 function keepMatchesCurrent(
   scrollerRef: RefObject<HTMLElement | null>,
   latestQuery: RefObject<string>,
-  onMatches: (found: Range[]) => void,
+  onMatches: (found: StaticRange[]) => void,
 ): () => void {
   const scroller = scrollerRef.current
   if (!scroller) return () => {}

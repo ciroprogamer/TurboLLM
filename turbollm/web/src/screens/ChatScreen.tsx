@@ -75,11 +75,13 @@ function truncateName(name: string): string {
   return name.length > PLACEHOLDER_NAME_MAX ? `${name.slice(0, PLACEHOLDER_NAME_MAX - 1)}…` : name
 }
 
+const onMac = () => /Mac/i.test(navigator.platform)
+
 // Ctrl+F is "forward one character" in a Mac text field, so on a Mac only Cmd+F opens find.
 function isFindShortcut(e: KeyboardEvent): boolean {
   // `key` is undefined on the keydown events browser autofill fires, so it cannot be assumed a string.
   if (e.shiftKey || e.altKey || e.key?.toLowerCase() !== 'f') return false
-  return e.metaKey || (e.ctrlKey && !/Mac/i.test(navigator.platform))
+  return e.metaKey || (e.ctrlKey && !onMac())
 }
 
 export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; convIdOverride?: string } = {}) {
@@ -1208,7 +1210,7 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
             </DropdownMenu>
           )}
           {activeId && (
-            <Button size="icon" variant="ghost" className="h-8 w-8" title="Find in chat (Ctrl+F)" aria-label="Find in chat" onClick={openFind}>
+            <Button size="icon" variant="ghost" className="h-8 w-8" title={`Find in chat (${onMac() ? '⌘F' : 'Ctrl+F'})`} aria-label="Find in chat" onClick={openFind}>
               <Search size={15} />
             </Button>
           )}

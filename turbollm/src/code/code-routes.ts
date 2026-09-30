@@ -46,11 +46,24 @@ const VALID_MODES = new Set<CodeMode>(['auto', 'plan', 'ask'])
 /** The Session name box in the web UI stops at this many characters; the API holds the same limit. */
 const MAX_SESSION_TITLE_LENGTH = 120
 
-/** A name a person gave a session: one line, at most MAX_SESSION_TITLE_LENGTH characters (counted as
- *  characters, so an emoji is never cut in half), not ending in a space; '' if it is not text. */
+/** A request can carry a title of any length; only this much of it is ever looked at. */
+const MAX_SESSION_TITLE_INPUT = 10_000
+
+/** A name a person gave a session: one line of at most MAX_SESSION_TITLE_LENGTH characters, cut only
+ *  between characters as the reader sees them (a flag or a family emoji is several code points but one
+ *  character), and not ending in a space. '' if it is not text. */
 function cleanSessionTitle(value: unknown): string {
   if (typeof value !== 'string') return ''
-  return Array.from(value.replace(/\s+/g, ' ').trim()).slice(0, MAX_SESSION_TITLE_LENGTH).join('').trimEnd()
+  const oneLine = value.slice(0, MAX_SESSION_TITLE_INPUT).replace(/\s+/g, ' ').trim()
+  let title = ''
+  let codePoints = 0
+  for (const { segment } of new Intl.Segmenter().segment(oneLine)) {
+    const size = Array.from(segment).length
+    if (codePoints + size > MAX_SESSION_TITLE_LENGTH) break
+    title += segment
+    codePoints += size
+  }
+  return title.trimEnd()
 }
 
 /** Pure validation for POST .../revert (founder bug report, 2026-07-17; corrected same day after

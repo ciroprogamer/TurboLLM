@@ -86,6 +86,34 @@ test('PATCH /code/sessions/:id/title does not leave the name ending in a space, 
   assert.equal(Array.from(title).length, 120)
 })
 
+test('PATCH /code/sessions/:id/title never cuts through one visible character, only between them', async () => {
+  const { app, db } = makeApp()
+  const id = await createSession(app)
+  // Each of these is ONE character to the reader but several code points, so a cut inside it leaves a
+  // stray half: a lone regional letter, a dangling joiner, a bare base letter.
+  const cases: Array<[string, string]> = [
+    ['flag', '🇮🇳'],
+    ['family', '👨‍👩‍👧'],
+    ['skin tone', '👍🏽'],
+    ['keycap', '1️⃣'],
+    ['accent', 'é'],
+  ]
+  for (const [name, character] of cases) {
+    await rename(app, id, `${'a'.repeat(118)}${character}`)
+    const title = db.getAgentRun(id)?.title ?? ''
+    assert.ok(title === 'a'.repeat(118) || title === `${'a'.repeat(118)}${character}`, `${name}: stored ${JSON.stringify(title)}`)
+  }
+})
+
+test('PATCH /code/sessions/:id/title keeps the first 120 characters of an enormous title, and letters that look like whitespace escapes are untouched', async () => {
+  const { app, db } = makeApp()
+  const id = await createSession(app)
+
+  await rename(app, id, `sss ${'a'.repeat(3_000_000)}`)
+
+  assert.equal(db.getAgentRun(id)?.title, `sss ${'a'.repeat(116)}`)
+})
+
 test('PATCH /code/sessions/:id/title reports the name it actually stored', async () => {
   const { app } = makeApp()
   const id = await createSession(app)

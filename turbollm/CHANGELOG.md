@@ -64,8 +64,6 @@ _Nothing yet._
 
 - **Windows update fix.** Updating TurboLLM no longer stops at "TurboLLM cannot be closed" when nothing is running. The
   cause was over-long file paths inside the old install; the installer now clears them first.
-- **Search inside a chat.** Press Ctrl/Cmd+F (or the new search button in the chat header), and Enter or the up and
-  down buttons jump to each match.
 - **Thinking blocks are resizable.** Drag one's bottom edge to the size you like and every thinking block remembers it.
 - **Name a Code session when you start it.** The launchpad has an optional "Session name" field, and a name you give
   is kept.

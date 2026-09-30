@@ -267,7 +267,14 @@ export function extractZipFiles(buf: Buffer, selection: ZipSelection, destDir: s
   mkdirSync(destDir, { recursive: true })
   for (const entry of selection.files.values()) {
     const raw = buf.subarray(entry.dataOffset, entry.dataOffset + entry.compSize)
-    const data = entry.method === 8 ? inflateRawSync(raw) : raw
+    let data: Buffer
+    try {
+      data = entry.method === 8 ? inflateRawSync(raw, { maxOutputLength: Math.max(1, entry.size) }) : raw
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE')
+        throw new ZipError('zip_too_large', `"${entry.name}" expands past its declared size.`)
+      throw new ZipError('bad_zip', `"${entry.name}" could not be decompressed — the archive is corrupt.`)
+    }
     if (data.length !== entry.size) throw new ZipError('bad_zip', `"${entry.name}" does not match its declared size.`)
     if (crc32(data) !== entry.crc32) throw new ZipError('zip_crc_mismatch', `"${entry.name}" failed its CRC-32 check — the archive is corrupt.`)
     writeFileSync(join(destDir, baseOf(entry.name)), data)

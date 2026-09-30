@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { ArrowLeft, CheckCircle2, FolderOpen, Loader2, Plus, SearchX } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, CheckCircle2, FileArchive, FolderOpen, Loader2, Plus, SearchX } from 'lucide-react'
 import { ApiError, track } from '../../lib/api'
-import { useEngineMutations, useEngineScan } from '../../lib/queries'
+import { useEngineMutations, useEngineScan, useEngineZipUpload } from '../../lib/queries'
 import type { EngineScanResult } from '../../lib/types'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
@@ -21,9 +21,9 @@ import { FsBrowser } from './FsBrowser'
 type Step = 'choose' | 'scanning' | 'confirm' | 'notfound'
 
 /** Guided "Add your own engine" flow (engine overhaul, Phase 3). A 2-step journey:
- *  (1) pick a FOLDER (or the binary directly), we scan it for the server binary;
- *  (2) confirm the auto-detected version + a pre-filled name, then Add. Graceful
- *  fallback when nothing is found. Registration still goes through POST
+ *  (1) pick a FOLDER (or the binary directly), upload a .zip, or browse — we scan for the
+ *  server binary; (2) confirm the auto-detected version + a pre-filled name, then Add.
+ *  Graceful fallback when nothing is found. Registration still goes through POST
  *  /api/v1/engines; scan is read-only. Same exported name + trigger as before — the
  *  EnginesScreen call sites are unchanged.
  *
@@ -52,6 +52,11 @@ export function AddEngineDialog({
   }
   const [step, setStep] = useState<Step>('choose')
   const [browse, setBrowse] = useState<null | 'folder' | 'file'>(null)
+  // Which source the in-flight scan came from — only varies the scanning/not-found copy;
+  // the confirm step is identical (both paths end in an absolute binPath to register).
+  const [scanSource, setScanSource] = useState<'path' | 'zip'>('path')
+  const [zipName, setZipName] = useState('')
+  const zipInput = useRef<HTMLInputElement>(null)
   // Confirm-step state, set from a successful scan.
   const [binPath, setBinPath] = useState('')
   const [version, setVersion] = useState('')
@@ -66,6 +71,7 @@ export function AddEngineDialog({
 
   const { add } = useEngineMutations()
   const scan = useEngineScan()
+  const zipUpload = useEngineZipUpload()
 
   // ADR-089: when opened with a prefilled source repo (the build-guide hand-off), seed
   // the field so the rebuild-tracking provenance is attached without re-typing it.
@@ -76,6 +82,8 @@ export function AddEngineDialog({
   const reset = () => {
     setStep('choose')
     setBrowse(null)
+    setScanSource('path')
+    setZipName('')
     setBinPath('')
     setVersion('')
     setName('')
@@ -84,25 +92,49 @@ export function AddEngineDialog({
     setError(null)
   }
 
+  // Route a scan result (folder scan or zip upload — same response shape) to confirm /
+  // notfound. The zip name rides along only for the in-progress copy.
+  const applyScanResult = (res: EngineScanResult) => {
+    if (!res.found) {
+      setStep('notfound')
+      return
+    }
+    setBinPath(res.binPath)
+    setVersion(res.version)
+    setName(res.suggestedName)
+    setStep('confirm')
+  }
+
   // Run the read-only scan on the chosen path, then route to confirm / notfound.
   // A ProbeError (wrong-OS / timeout) comes back as an ApiError → inline on choose.
   const runScan = (path: string) => {
     setError(null)
     setNameError(null)
+    setScanSource('path')
     setStep('scanning')
     scan.mutate(path, {
-      onSuccess: (res: EngineScanResult) => {
-        if (!res.found) {
-          setStep('notfound')
-          return
-        }
-        setBinPath(res.binPath)
-        setVersion(res.version)
-        setName(res.suggestedName)
-        setStep('confirm')
-      },
+      onSuccess: applyScanResult,
       onError: (e) => {
         setError(e instanceof ApiError ? e.message : 'Could not scan that location.')
+        setStep('choose')
+      },
+    })
+  }
+
+  // Upload a .zip build (the third source): the daemon searches it at any depth for the
+  // server binary + this platform's libs, extracts into its own engines storage, and
+  // probes — same response contract as the folder scan, so the steps from here on are
+  // shared. Clears the input's value so picking the same file again re-fires onChange.
+  const runZipUpload = (file: File) => {
+    setError(null)
+    setNameError(null)
+    setScanSource('zip')
+    setZipName(file.name)
+    setStep('scanning')
+    zipUpload.mutate(file, {
+      onSuccess: applyScanResult,
+      onError: (e) => {
+        setError(e instanceof ApiError ? e.message : 'Could not read that zip.')
         setStep('choose')
       },
     })
@@ -159,7 +191,7 @@ export function AddEngineDialog({
               <DialogTitle>Add your own engine</DialogTitle>
               <DialogDescription>
                 Bring any llama.cpp-compatible build or community fork. Pick the folder it lives
-                in and we&apos;ll find the server binary for you.
+                in, upload its .zip, and we&apos;ll find the server binary for you.
               </DialogDescription>
             </DialogHeader>
 
@@ -167,6 +199,27 @@ export function AddEngineDialog({
               <Button onClick={() => { track('engines', 'browse_new_engine_folder'); setBrowse('folder') }} className="w-full">
                 <FolderOpen size={16} /> Choose folder…
               </Button>
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={zipUpload.isPending}
+                onClick={() => zipInput.current?.click()}
+              >
+                <FileArchive size={16} /> Upload a .zip…
+              </Button>
+              <input
+                ref={zipInput}
+                type="file"
+                accept=".zip,application/zip,application/x-zip-compressed"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!f) return
+                  track('engines', 'upload_new_engine_zip')
+                  runZipUpload(f)
+                }}
+              />
               <button
                 type="button"
                 onClick={() => { track('engines', 'browse_new_engine_binary'); setBrowse('file') }}
@@ -195,7 +248,9 @@ export function AddEngineDialog({
             </DialogHeader>
             <div className="flex items-center gap-3 rounded-lg border border-border bg-panel p-4 text-[13px] text-muted">
               <Loader2 size={18} className="shrink-0 animate-spin text-ink" />
-              Looking for the server binary…
+              {scanSource === 'zip'
+                ? `Uploading & extracting ${zipName}…`
+                : 'Looking for the server binary…'}
             </div>
           </>
         )}
@@ -271,16 +326,28 @@ export function AddEngineDialog({
             </DialogHeader>
             <div className="flex items-start gap-2.5 rounded-lg border border-border bg-panel p-4 text-[13px] text-muted">
               <SearchX size={18} className="mt-0.5 shrink-0 text-faint" />
-              <span>
-                We couldn&apos;t find <code className="font-mono">llama-server</code> in that folder. Pick the
-                folder that contains it, or select the binary directly.
-              </span>
+              {scanSource === 'zip' ? (
+                <span>
+                  We couldn&apos;t find <code className="font-mono">llama-server</code> for this
+                  platform in <span className="font-mono">{zipName}</span>. Make sure the zip
+                  contains a build for the OS TurboLLM is running on, then try again.
+                </span>
+              ) : (
+                <span>
+                  We couldn&apos;t find <code className="font-mono">llama-server</code> in that
+                  folder. Pick the folder that contains it, or select the binary directly.
+                </span>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => { track('engines', 'back_to_add_engine_choose'); setStep('choose') }}>
                 <ArrowLeft size={16} /> Back
               </Button>
-              <Button onClick={() => { track('engines', 'browse_new_engine_binary'); setBrowse('file') }}>Pick the binary directly</Button>
+              {scanSource === 'path' && (
+                <Button onClick={() => { track('engines', 'browse_new_engine_binary'); setBrowse('file') }}>
+                  Pick the binary directly
+                </Button>
+              )}
             </DialogFooter>
           </>
         )}

@@ -51,6 +51,7 @@ import { ensureLlamafile, llamafileBinPath, llamafileDir } from '../engines/llam
 import { catalogForPlatform, catalogEngine } from '../engines/catalog'
 import { checkBuildPrereqs } from '../engines/build-prereqs'
 import { runBuild, runPrereqInstall, buildDirName, chooseEngineName, findCatalogBuildOnDisk, findEngineForCatalogEntry, findNameConflict, findPriorEngine, isEngineInBuildDir, normRepoUrl, sameRepo, sourceBuildDirOf } from '../engines/build-runner'
+import { installZipEngine, MAX_ZIP_BYTES, packagedAndroidApp, ZipError, zipBuildDirName } from '../engines/zip-install'
 import { provisionCuda } from '../engines/cuda-provision'
 import { detectHardware } from '../engines/hardware'
 import { recommendEngines } from '../engines/recommend'
@@ -82,7 +83,7 @@ import { engineDeleteBlocked, modelDeleteBlocked } from './delete-guards'
 import { annotateCheckpoint } from '../hf/checkpoints'
 import { registerActivityRoutes } from './active-work'
 
-type Status = 200 | 201 | 202 | 400 | 401 | 403 | 404 | 409 | 500 | 501 | 503
+type Status = 200 | 201 | 202 | 400 | 401 | 403 | 404 | 409 | 413 | 500 | 501 | 503
 
 function err(c: Context, status: Status, code: string, message: string) {
   return c.json({ error: { code, message } }, status)
@@ -1138,6 +1139,57 @@ export function registerApi(app: Hono, d: Deps): void {
         suggestedName: suggestEngineName(binPath, version),
       })
     } catch (e) {
+      if (e instanceof ProbeError) return err(c, 400, e.code, e.message)
+      return err(c, 500, 'internal', (e as Error).message)
+    }
+  })
+
+  // Custom-build .zip upload — the third Add-engine source (after the folder scan above
+  // and /build/run). One multipart POST carries the archive; the daemon searches it at ANY
+  // depth for llama-server, extracts binary + this platform's shared libraries into
+  // {dataDir}/engines/build/<slug>/ (flat, so the Windows loader and the LD_LIBRARY_PATH the
+  // probe/launch paths already set resolve them — including Android/Termux), chmods the
+  // binary, and probes. Same response shape and registration path as /engines/scan, so the
+  // Add-engine dialog's confirm step works unchanged, and DELETE ?purge=1 removes the
+  // extracted files through the existing sourceBuildDirOf rule — no new delete path.
+  app.post('/api/v1/engines/zip', async (c) => {
+    // The upload ends in probe() (executes the extracted binary), and the request itself can
+    // replace a build's files — same isLocalOrAuthenticated rule as /engines/scan (ADR-394).
+    if (!isLocalOrAuthenticated(c, d))
+      return err(c, 403, 'forbidden', 'Uploading an engine zip requires a valid API key from a non-host device.')
+    // The packaged Android app's W^X hardening forbids execve() outside nativeLibraryDir —
+    // refuse up front instead of extracting files that can never run (Termux is unaffected).
+    if (packagedAndroidApp())
+      return err(c, 501, 'android_packaged_app', 'The packaged Android app cannot run downloaded binaries. Upload this zip from Termux or a desktop install instead.')
+    // Reject an oversized upload before the body is buffered into memory.
+    const declared = Number(c.req.header('content-length') ?? '0')
+    if (declared > MAX_ZIP_BYTES)
+      return err(c, 413, 'zip_too_large', `Engine zips are capped at ${MAX_ZIP_BYTES / (1024 * 1024 * 1024)} GiB.`)
+    // Writes under <dataDir>/engines like a provision or a build — never concurrent with either.
+    const busy = engineWorkBusy(d)
+    if (busy) return err(c, 409, 'engine_already_running', busy)
+    let file: File
+    try {
+      const f = (await c.req.parseBody())['file']
+      if (!(f instanceof File)) return err(c, 400, 'invalid_config_value', 'A multipart form with one "file" field is required.')
+      file = f
+    } catch {
+      return err(c, 400, 'invalid_config_value', 'Could not read the uploaded form data.')
+    }
+    if (file.size > MAX_ZIP_BYTES)
+      return err(c, 413, 'zip_too_large', `Engine zips are capped at ${MAX_ZIP_BYTES / (1024 * 1024 * 1024)} GiB.`)
+    const enginesRoot = join(d.store.dir(), 'engines')
+    // A same-named zip replaces a prior extraction's dir in place (rebuild semantics); refuse
+    // when that dir belongs to the RUNNING engine, exactly like POST /build/run.
+    const targetDir = join(enginesRoot, 'build', zipBuildDirName(file.name))
+    const running = d.registry.active()
+    if (running && engineBusy(d) && isEngineInBuildDir(running.binPath, targetDir))
+      return err(c, 409, 'engine_in_use', `Stop "${running.name}" before replacing its files — the upload extracts over its build folder.`)
+    try {
+      const res = await installZipEngine(enginesRoot, file.name, Buffer.from(await file.arrayBuffer()))
+      return c.json(res)
+    } catch (e) {
+      if (e instanceof ZipError) return err(c, e.code === 'zip_too_large' ? 413 : 400, e.code, e.message)
       if (e instanceof ProbeError) return err(c, 400, e.code, e.message)
       return err(c, 500, 'internal', (e as Error).message)
     }

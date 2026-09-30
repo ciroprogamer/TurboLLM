@@ -23,6 +23,19 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
+### Added
+
+- **Add your own engine by uploading its .zip.** In the Add-engine flow, "Upload a .zip…" now sits beside
+  "Choose folder…": pick a fork's release archive and TurboLLM searches it at any depth for `llama-server`,
+  extracts the binary together with this platform's shared libraries (`.dll` / `.dylib` / `.so`, found anywhere
+  in the archive), and probes it — the same confirm-and-register step as a folder. The files land under
+  TurboLLM's own engine storage as `engines/build/<zip-name>/`, laid out flat so the Windows loader and the
+  `LD_LIBRARY_PATH` the engine already launches with resolve the libraries — including on Termux/Android —
+  and the engine's Delete button removes them, exactly like a self-built engine. Works on Windows, macOS,
+  Linux, and Termux; the packaged Android app declines with a clear message (its OS forbids running downloaded
+  binaries). Corrupt archives, wrong-platform builds, and truncated uploads fail cleanly and never leave a
+  half-installed build behind.
+
 ### Fixed
 
 - **Windows: updating TurboLLM no longer stops at "TurboLLM cannot be closed"** (GitHub #250). An update removes the

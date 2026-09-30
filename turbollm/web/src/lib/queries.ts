@@ -89,6 +89,7 @@ import {
   removeModelDir,
   renameEngine,
   scanEngineFolder,
+  uploadEngineZip,
   setPrimaryModelDir,
   reprobeEngine,
   rescanModels,
@@ -574,6 +575,13 @@ export function useEngineMutations() {
  *  the actual add still goes through {@link useEngineMutations}.add. */
 export function useEngineScan() {
   return useMutation({ mutationFn: (path: string) => scanEngineFolder(path) })
+}
+
+/** Upload a custom build .zip (the Add-engine flow's upload source). Same contract as
+ *  {@link useEngineScan} — server-side extraction + probe, registration still via
+ *  useEngineMutations().add, so no invalidation here either. */
+export function useEngineZipUpload() {
+  return useMutation({ mutationFn: (file: File) => uploadEngineZip(file) })
 }
 
 /** Browse a directory for the engine-binary picker (spec 03 §9). `path` is the

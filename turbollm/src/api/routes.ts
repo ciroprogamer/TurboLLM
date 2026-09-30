@@ -1153,6 +1153,11 @@ export function registerApi(app: Hono, d: Deps): void {
   // Add-engine dialog's confirm step works unchanged, and DELETE ?purge=1 removes the
   // extracted files through the existing sourceBuildDirOf rule — no new delete path.
   app.post('/api/v1/engines/zip', async (c) => {
+    // multipart/form-data needs no CORS preflight, so the /api/* allowlist doesn't stop a
+    // cross-site POST — refuse anything a browser marks as coming from another site.
+    const site = c.req.header('sec-fetch-site')
+    if (site && site !== 'same-origin' && site !== 'none')
+      return err(c, 403, 'forbidden', 'Engine uploads must come from the TurboLLM app itself.')
     // The upload ends in probe() (executes the extracted binary), and the request itself can
     // replace a build's files — same isLocalOrAuthenticated rule as /engines/scan (ADR-394).
     if (!isLocalOrAuthenticated(c, d))

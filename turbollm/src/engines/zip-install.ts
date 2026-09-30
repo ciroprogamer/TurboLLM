@@ -132,7 +132,7 @@ export function readZipEntries(buf: Buffer): ZipEntry[] {
     const name = buf.toString(flags & UTF8_NAME_FLAG ? 'utf8' : 'latin1', nameEnd - nameLen, nameEnd)
     if (method !== 0 && method !== 8)
       throw new ZipError('unsupported_compression', `"${name}" uses compression method ${method} (only stored and deflate are supported).`)
-    if (size > MAX_ENTRY_UNCOMPRESSED) throw new ZipError('zip_too_large', `"${name}" expands past the ${MAX_ENTRY_UNCOMPRESSED >> 30} GiB per-member cap.`)
+    if (size > MAX_ENTRY_UNCOMPRESSED) throw new ZipError('zip_too_large', `"${name}" expands past the ${MAX_ENTRY_UNCOMPRESSED / 2 ** 30} GiB per-member cap.`)
     totalUncompressed += size
     if (totalUncompressed > MAX_TOTAL_UNCOMPRESSED) throw new ZipError('zip_too_large', 'Archive expands past the total uncompressed-size cap.')
 

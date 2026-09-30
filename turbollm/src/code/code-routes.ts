@@ -43,6 +43,29 @@ async function body<T>(c: Context): Promise<T> { try { return await c.req.json()
 
 const VALID_MODES = new Set<CodeMode>(['auto', 'plan', 'ask'])
 
+/** The Session name box in the web UI stops at this many characters; the API holds the same limit. */
+const MAX_SESSION_TITLE_LENGTH = 120
+
+/** A request can carry a title of any length; only this much of it is ever looked at. */
+const MAX_SESSION_TITLE_INPUT = 10_000
+
+/** A name a person gave a session: one line of at most MAX_SESSION_TITLE_LENGTH characters, cut only
+ *  between characters as the reader sees them (a flag or a family emoji is several code points but one
+ *  character), and not ending in a space. '' if it is not text. */
+function cleanSessionTitle(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const oneLine = value.slice(0, MAX_SESSION_TITLE_INPUT).replace(/\s+/g, ' ').trim()
+  let title = ''
+  let codePoints = 0
+  for (const { segment } of new Intl.Segmenter().segment(oneLine)) {
+    const size = Array.from(segment).length
+    if (codePoints + size > MAX_SESSION_TITLE_LENGTH) break
+    title += segment
+    codePoints += size
+  }
+  return title.trimEnd()
+}
+
 /** Pure validation for POST .../revert (founder bug report, 2026-07-17; corrected same day after
  *  live-testing against a real 40-message session — see the route below for the full story): is
  *  `messageId` a valid revert target in `messages`? Exported for direct unit testing without a
@@ -144,11 +167,12 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
   // ── create a session ─────────────────────────────────────────────────────────
   app.post('/api/v1/code/sessions', async (c) => {
     const b = await body<{
-      repoRoot?: string; repoBranch?: string; modelKey?: string; mode?: string; task?: string
+      repoRoot?: string; repoBranch?: string; modelKey?: string; mode?: string; task?: string; title?: unknown
       useWorktree?: boolean; worktreeBranch?: string; worktreeBase?: string; contextFiles?: string[]
     }>(c)
     const repoRoot = (b.repoRoot ?? '').trim()
     const task = (b.task ?? '').trim()
+    const chosenTitle = cleanSessionTitle(b.title)
     const mode = (b.mode ?? 'auto') as CodeMode
     if (!repoRoot) return err(c, 400, 'invalid_input', 'repoRoot is required.')
     if (!task) return err(c, 400, 'invalid_input', 'A task description is required.')
@@ -183,7 +207,7 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
     const codeAgent = d.store.snapshot().code.defaultAgent
     const run = db.createAgentRun({
       convId: conv.id,
-      title: task.slice(0, 60),
+      title: chosenTitle || task.slice(0, 60),
       allowedTools: [],
       repoRoot,
       repoBranch: b.repoBranch,
@@ -196,6 +220,9 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
       worktreePath,
       codeAgent,
     })
+    // A name the user chose is theirs: switch off the one-time auto-generated title, or the first
+    // successful turn would replace it (code-run-manager.ts, gated on titleAutoSynced).
+    if (chosenTitle) db.updateAgentRun(run.id, { titleAutoSynced: true })
     // Seed the task as the first user message so re-opening the session shows it. Any attached
     // context-file paths are stored as textAttachments (shown as chips) — POST /messages folds
     // them into the actual prompt when this seeded task's turn runs (see contextFilesBlock).
@@ -408,10 +435,12 @@ export function registerCodeRoutes(app: Hono, d: Deps, codeRuns?: CodeRunManager
     const id = c.req.param('id')
     const run = db.getAgentRun(id)
     if (!run) return err(c, 404, 'not_found', 'Session not found.')
-    const b = await body<{ title?: string }>(c)
-    const title = (b.title ?? '').trim()
+    const b = await body<{ title?: unknown }>(c)
+    const title = cleanSessionTitle(b.title)
     if (!title) return err(c, 400, 'invalid_input', 'title is required.')
-    db.updateAgentRun(id, { title })
+    // A name the user typed is theirs, exactly as one given at creation: without the flag, renaming
+    // before the first successful turn finished gets the new name replaced by the auto-generated one.
+    db.updateAgentRun(id, { title, titleAutoSynced: true })
     return c.json({ ok: true, title })
   })
 

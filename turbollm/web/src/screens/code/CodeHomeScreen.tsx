@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PanelLeft } from 'lucide-react'
+import { PanelLeft, Pencil } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { DEFAULT_REASONING_EFFORT, type ReasoningEffort } from '../../components/ReasoningEffortSelect'
 import { toast } from '../../components/ui/sonner'
@@ -30,6 +30,7 @@ import { AGENT_MODES, STARTER_TASKS } from './code-mock'
  *  repo pill has quick options beyond "Browse…" without TurboLLM tracking a project
  *  registry server-side (there isn't one; the picker is just the local filesystem). */
 const RECENT_REPOS_KEY = 'tllm.code.recentRepos'
+const SESSION_NAME_MAX_LENGTH = 120
 function readRecentRepos(): string[] {
   try {
     const raw = localStorage.getItem(RECENT_REPOS_KEY)
@@ -194,6 +195,7 @@ export function CodeHomeScreen() {
 
   const [mode, setMode] = useState(AGENT_MODES[0])
   const [input, setInput] = useState('')
+  const [sessionName, setSessionName] = useState('')
   // Thinking budget — same control/semantics as ChatScreen's/CodeSessionScreen's own slider.
   // No session exists yet here, so this reads/writes only the shared global default
   // (`tllm.thinkingBudget.default`) — the new session's first run (auto-started by
@@ -265,6 +267,7 @@ export function CodeHomeScreen() {
   // than "this task's text" and are more convenient left alone.
   const resetComposer = () => {
     setInput('')
+    setSessionName('')
     setUseWorktree(false)
     setBranchName('')
     inputRef.current?.focus()
@@ -304,6 +307,7 @@ export function CodeHomeScreen() {
         modelKey: activeRemoteId ?? model?.key,
         mode: mode.id,
         task,
+        title: sessionName.trim() || undefined,
         useWorktree,
         worktreeBranch: useWorktree ? (branchName.trim() || suggestBranchName(task)) : undefined,
         worktreeBase: useWorktree ? baseBranch : undefined,
@@ -458,6 +462,24 @@ export function CodeHomeScreen() {
             </button>
           ))}
         </div>
+
+        <label
+          title="Name this session — leave empty to name it after the task"
+          className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-border bg-panel-2 px-2.5 py-1 text-[12px] leading-none text-muted transition-colors focus-within:border-[color:var(--accent)]"
+        >
+          <Pencil size={12} className="shrink-0" />
+          <input
+            value={sessionName}
+            onChange={(e) => setSessionName(e.target.value)}
+            placeholder="Session name (optional)"
+            aria-label="Session name (optional)"
+            maxLength={SESSION_NAME_MAX_LENGTH}
+            spellCheck={false}
+            autoComplete="off"
+            className="w-[190px] bg-transparent text-ink placeholder:text-faint md:w-[260px]"
+            style={{ outline: 'none' }}
+          />
+        </label>
 
         <CodeComposer
           inputRef={inputRef}

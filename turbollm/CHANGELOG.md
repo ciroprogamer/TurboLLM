@@ -23,6 +23,32 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [1.14.3] - 2026-09-30
+
+### Added
+
+- **Find in chat** (GitHub #52). Press Ctrl/Cmd+F in a chat, or use the new search button in its header, to search
+  that conversation. It shows "3 of 17", Enter (Shift+Enter goes back) or the up and down buttons jump between
+  matches, and Esc closes it. Matches are highlighted in place, phrases are found even where the text is bold, code or
+  otherwise formatted, new text that streams in is picked up, and it works on phones through the button. It searches
+  what is on screen, so open a collapsed thinking block to search inside it. A very common search counts up to 10,000
+  matches ("1 of 10000+").
+- **Name a Code session when you start it.** The launchpad has an optional "Session name" field. A name you give is
+  kept: the automatically generated title no longer replaces it after the first reply. Leave it empty and the session
+  is named after your task as before.
+
+### Changed
+
+- **An open thinking block now grows with the reasoning** instead of scrolling inside a small fixed box, so a fast
+  model's reasoning can be skimmed as it streams. Drag its bottom edge to set a size: it is remembered, shared by
+  every thinking block, and the newest text stays in view while it streams. It still starts collapsed, and the "hide
+  thinking" setting is unchanged.
+- **Windows installer: a running TurboLLM gets about a minute to close**, retried automatically, before the installer
+  asks you to close it. If it still can't, what the installer found running is written to
+  `%TEMP%\TurboLLM-installer-diagnostic.log`.
+
 ### Fixed
 
 - **Windows: updating TurboLLM no longer stops at "TurboLLM cannot be closed"** (GitHub #250). An update removes the
@@ -31,12 +57,16 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   update stopped even with nothing running, and Retry could never help. The installer now deletes that folder first,
   with a delete that works past the limit; the update installs a fresh copy. A few files in the new version are still
   that deep, so the file-copy step can still show the same message once; Retry there goes through.
+- **Renaming a Code session before its first reply finishes now keeps your name.** The automatically generated title
+  used to replace it when that first reply completed. Names are also kept to one line of at most 120 characters.
 
-### Changed
+### Discord
 
-- **Windows installer: a running TurboLLM gets about a minute to close**, retried automatically, before the installer
-  asks you to close it. If it still can't, what the installer found running is written to
-  `%TEMP%\TurboLLM-installer-diagnostic.log`.
+- **Windows update fix.** Updating TurboLLM no longer stops at "TurboLLM cannot be closed" when nothing is running. The
+  cause was over-long file paths inside the old install; the installer now clears them first.
+- **Thinking blocks are resizable.** Drag one's bottom edge to the size you like and every thinking block remembers it.
+- **Name a Code session when you start it.** The launchpad has an optional "Session name" field, and a name you give
+  is kept.
 
 ## [1.14.2] - 2026-09-27
 

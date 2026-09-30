@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type Ref, type RefObject } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,19 +13,22 @@ import { ArtifactCard, isArtifactLang } from '../../components/ArtifactCard'
 import { isRoutineConfirmTool, isSupersededUpdatePreview, RoutineConfirmToolCard } from '../../components/routines/RoutineConfirmToolCard'
 import { friendlyName } from '../../lib/tool-explain'
 import { track } from '../../lib/api'
+import { saveThinkingBlockHeight, useThinkingBlockHeight } from '../../lib/thinking-block-size'
 
 // ── Thinking block ────────────────────────────────────────────────────────────
 
 function ThinkingBlock({ reasoning, thinkMs, streaming, showThinking = true }: { reasoning: string; thinkMs?: number; streaming?: boolean; showThinking?: boolean }) {
-  // Always collapsed by default; expands into a fixed-height scroll window so long
-  // reasoning never balloons the chat.
+  // Collapsed by default. Once open it grows with the reasoning, so the chat's own scroll follows
+  // it as it streams, until the reader drags it to a size; that size is then remembered and shared
+  // by every block. A fixed-height box made fast reasoning impossible to skim (GitHub #52).
   const [open, setOpen] = useState(false)
-  const scrollRef = useRef<HTMLPreElement>(null)
-  useEffect(() => {
-    if (open && streaming && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [reasoning, open, streaming])
+  const reasoningRef = useRef<HTMLPreElement>(null)
+  const chosenHeight = useThinkingBlockHeight()
+  // The text box only exists while it is open AND thinking is shown; switching the setting off and on
+  // gives a new element, so the hooks must be told, or they keep watching the removed one.
+  const showingText = open && showThinking
+  useRememberDraggedHeight(reasoningRef, showingText)
+  useFollowStreamingText(reasoningRef, showingText && !!streaming, reasoning)
   const label = thinkMs ? `Thought for ${(thinkMs / 1000).toFixed(1)}s` : streaming ? 'Thinking…' : 'Thinking'
   // When thinking is globally hidden, show only the stats line (no expand toggle).
   if (!showThinking) {
@@ -48,14 +51,36 @@ function ThinkingBlock({ reasoning, thinkMs, streaming, showThinking = true }: {
       </button>
       {open && (
         <pre
-          ref={scrollRef}
-          className="max-h-48 overflow-auto px-3 pb-3 font-mono text-[12px] leading-relaxed text-muted whitespace-pre-wrap"
+          ref={reasoningRef}
+          style={chosenHeight ? { height: chosenHeight } : undefined}
+          className="min-h-12 resize-y overflow-auto px-3 pb-3 font-mono text-[12px] leading-relaxed text-muted whitespace-pre-wrap break-words"
         >
           {reasoning}
         </pre>
       )}
     </div>
   )
+}
+
+// The browser gives the block an inline height only when the reader drags its handle; the text
+// growing changes its size without one, so that is how a drag is told from growth.
+function useRememberDraggedHeight(block: RefObject<HTMLElement | null>, open: boolean) {
+  useEffect(() => {
+    const element = block.current
+    if (!open || !element || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (element.style.height) saveThinkingBlockHeight(parseFloat(element.style.height))
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [block, open])
+}
+
+// Once the reader has set a size the text scrolls inside the block, so keep the newest text in view.
+function useFollowStreamingText(block: RefObject<HTMLElement | null>, following: boolean, text: string) {
+  useEffect(() => {
+    if (following && block.current) block.current.scrollTop = block.current.scrollHeight
+  }, [block, following, text])
 }
 
 // ── Stats row ─────────────────────────────────────────────────────────────────

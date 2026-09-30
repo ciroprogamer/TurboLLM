@@ -99,6 +99,9 @@ export interface CreateCodeSessionParams {
   modelKey?: string
   mode: CodeMode
   task: string
+  /** The session's name, when the user chose one. Omitted, the daemon names it after the task and
+   *  auto-generates a better title after the first turn; given, it is kept as the user's own. */
+  title?: string
   useWorktree?: boolean
   worktreeBranch?: string
   worktreeBase?: string

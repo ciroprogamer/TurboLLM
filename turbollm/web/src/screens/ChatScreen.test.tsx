@@ -3,10 +3,10 @@
 // (its own model-list logic) with the data hooks and heavy children stubbed at their boundary —
 // the same "mock at the API boundary, keep the screen's own logic real" discipline as
 // CodeSessionScreen.test.tsx.
-import { render, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ModelEntry } from '../lib/types'
 
 // jsdom's environment doesn't wire up a working localStorage (the thinking-budget and reasoning-
@@ -22,6 +22,7 @@ beforeEach(() => {
 })
 
 let mockLibrary: Array<Partial<ModelEntry>> = []
+let mockConversation: unknown = undefined
 
 vi.mock('../lib/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/queries')>()
@@ -46,8 +47,14 @@ vi.mock('../lib/chat-queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/chat-queries')>()
   return {
     ...actual,
-    useConversation: () => ({ data: undefined }),
-    useConversationMutations: () => ({ create: { mutateAsync: vi.fn() }, update: { mutate: vi.fn(), mutateAsync: vi.fn() } }),
+    useConversation: () => ({ data: mockConversation }),
+    useConversationMutations: () => {
+      const idle = () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false })
+      return {
+        create: idle(), update: idle(), compact: idle(), deleteMsg: idle(), editMsg: idle(),
+        regenerate: idle(), stop: idle(), undoCompaction: idle(),
+      }
+    },
   }
 })
 
@@ -92,6 +99,177 @@ async function renderScreen() {
     </QueryClientProvider>,
   )
 }
+
+// GitHub #52 (b15hop): find text inside a long chat. The find bar itself is covered in
+// chat/ChatFindBar.test.tsx; these check what only the screen owns — when Ctrl/Cmd+F is taken from
+// the browser, the header button, and that the bar searches the messages the screen really renders.
+function chatMessage(seq: number, role: 'user' | 'assistant', content: string) {
+  return {
+    id: `m${seq}`, convId: 'c1', seq, role, content, reasoning: '', attachments: [], textAttachments: [],
+    toolCalls: [], stats: {}, createdAt: '', variantGroup: null, isActive: true, edited: false,
+  }
+}
+
+function openConversation() {
+  return {
+    id: 'c1', title: 'Cats', systemPrompt: '', modelKey: '', sampling: {}, expertMode: false, preserveThinking: true,
+    messages: [chatMessage(1, 'user', 'Tell me about the cat'), chatMessage(2, 'assistant', 'A cat is a small mammal. Every cat purrs.')],
+  }
+}
+
+async function renderOpenConversation() {
+  const { ChatScreen } = await import('./ChatScreen')
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // jsdom has no layout: give matches a position and let the chat be scrolled without doing anything.
+  Object.defineProperty(Element.prototype, 'scrollTo', { configurable: true, writable: true, value: () => {} })
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, writable: true, value: () => ({ top: 0, height: 20 }) })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={['/chat/c1']}>
+        <Routes><Route path="/chat/:convId" element={<ChatScreen />} /></Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+const findBox = () => screen.queryByRole('textbox', { name: /find in chat/i })
+// The first render of this heavy screen is slow when the machine is busy (several test files at once),
+// so wait well past the default one second rather than fail on a slow start.
+const findBoxAppears = () => waitFor(() => expect(findBox()).not.toBeNull(), { timeout: 5000 })
+const pressFindShortcut = (init: KeyboardEventInit = { key: 'f', ctrlKey: true }) => {
+  const event = new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true })
+  window.dispatchEvent(event)
+  return event
+}
+
+describe('ChatScreen — find in chat', () => {
+  beforeEach(() => { mockConversation = openConversation() })
+  afterEach(() => { mockConversation = undefined })
+
+  it('opens the find bar on Ctrl+F, taking the shortcut from the browser', async () => {
+    await renderOpenConversation()
+    expect(findBox()).toBeNull()
+
+    const event = pressFindShortcut()
+
+    await findBoxAppears()
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('opens the find bar on Cmd+F too', async () => {
+    await renderOpenConversation()
+
+    pressFindShortcut({ key: 'F', metaKey: true })
+
+    await findBoxAppears()
+  })
+
+  it('leaves Ctrl+F to the browser when no conversation is open', async () => {
+    mockConversation = undefined
+    const { ChatScreen } = await import('./ChatScreen')
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={qc}><MemoryRouter><ChatScreen /></MemoryRouter></QueryClientProvider>)
+
+    const event = pressFindShortcut()
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(findBox()).toBeNull()
+  })
+
+  it('leaves Ctrl+F alone on a Mac, where it moves the cursor in a text field, but Cmd+F still opens find', async () => {
+    const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    try {
+      await renderOpenConversation()
+
+      const ctrlF = pressFindShortcut({ key: 'f', ctrlKey: true })
+      expect(ctrlF.defaultPrevented).toBe(false)
+      expect(findBox()).toBeNull()
+
+      pressFindShortcut({ key: 'f', metaKey: true })
+      await findBoxAppears()
+    } finally {
+      platform.mockRestore()
+    }
+  })
+
+  it('names the shortcut that works on this computer in the header button tooltip', async () => {
+    await renderOpenConversation()
+    expect(screen.getByRole('button', { name: /find in chat/i }).getAttribute('title')).toBe('Find in chat (Ctrl+F)')
+    cleanup()
+
+    const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    try {
+      await renderOpenConversation()
+
+      expect(screen.getByRole('button', { name: /find in chat/i }).getAttribute('title')).toBe('Find in chat (⌘F)')
+    } finally {
+      platform.mockRestore()
+    }
+  })
+
+  it('ignores a keydown that has no key, as browser autofill fires, instead of throwing', async () => {
+    await renderOpenConversation()
+    const onError = vi.fn()
+    window.addEventListener('error', onError)
+    const autofill = new KeyboardEvent('keydown', { ctrlKey: true, bubbles: true, cancelable: true })
+    Object.defineProperty(autofill, 'key', { value: undefined })
+
+    window.dispatchEvent(autofill)
+
+    window.removeEventListener('error', onError)
+    expect(onError).not.toHaveBeenCalled()
+    expect(findBox()).toBeNull()
+  })
+
+  it('closes the find bar when the chat it was searching is left, so it cannot carry a search into another chat', async () => {
+    await renderOpenConversation()
+    pressFindShortcut()
+    await findBoxAppears()
+
+    pressFindShortcut({ key: 'n', ctrlKey: true })
+
+    await waitFor(() => expect(findBox()).toBeNull())
+  })
+
+  it('opens the find bar from a header button, for phones and mice', async () => {
+    await renderOpenConversation()
+
+    fireEvent.click(screen.getByRole('button', { name: /find in chat/i }))
+
+    await findBoxAppears()
+  })
+
+  it('closes the find bar on Escape', async () => {
+    await renderOpenConversation()
+    pressFindShortcut()
+    await findBoxAppears()
+
+    fireEvent.keyDown(findBox()!, { key: 'Escape' })
+
+    expect(findBox()).toBeNull()
+  })
+
+  it('brings the cursor back to the box when Ctrl+F is pressed while it is already open', async () => {
+    await renderOpenConversation()
+    pressFindShortcut()
+    await findBoxAppears()
+    ;(document.activeElement as HTMLElement).blur()
+
+    pressFindShortcut()
+
+    await waitFor(() => expect(document.activeElement).toBe(findBox()))
+  })
+
+  it('searches the messages the chat actually shows', async () => {
+    await renderOpenConversation()
+    pressFindShortcut()
+    await findBoxAppears()
+
+    fireEvent.change(findBox()!, { target: { value: 'cat' } })
+
+    expect(screen.getByTestId('find-count').textContent).toBe('1 of 3')
+  })
+})
 
 describe('ChatScreen — model picker offers chat models only', () => {
   const chatModel: Partial<ModelEntry> = { key: 'qwen3-8b', name: 'Qwen3 8B', compatibleWithActiveEngine: true }

@@ -320,7 +320,7 @@ test('POST /api/v1/engines/zip: a fresh upload lands in engines/build/<slug> and
 
 // ── DELETE /api/v1/engines/zip (unconfirmed-install cleanup) ───────────────────
 
-function deleteZipInstall(app: Hono, binPath: string): Promise<Response> {
+function deleteZipInstall(app: Hono, binPath: string): Promise<Response> | Response {
   return app.request(`/api/v1/engines/zip?binPath=${encodeURIComponent(binPath)}`, { method: 'DELETE' })
 }
 

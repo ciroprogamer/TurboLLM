@@ -249,7 +249,10 @@ the detail:
   **prefill t/s**, **time-to-first-token**, **total time**, exact **token counts**, and a
   **context-usage meter** (filled / max) on every reply.
 - **Thinking control** — toggle reasoning **off** for a direct answer, or leave it **on** with
-  collapsible, timed "thought for N s" blocks.
+  collapsible, timed "thought for N s" blocks that grow with the reasoning; drag a block's bottom
+  edge to size it once and every block remembers it.
+- **Find in chat** — **Ctrl/Cmd+F** (or the header's search button) searches the open conversation:
+  "3 of 17", Enter or the up/down buttons jump between matches and pan the chat to each, Esc closes.
 - **Markdown + syntax-highlighted code** with one-click copy — plus **inline Unicode charts**
   the model draws when a comparison, trend, or hierarchy is genuinely worth a visual.
 - **Live artifacts** — `html`, `svg`, and `mermaid` replies render as **sandboxed, offline

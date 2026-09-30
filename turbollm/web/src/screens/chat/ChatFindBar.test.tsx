@@ -6,6 +6,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MAX_FIND_MATCHES } from '../../lib/chat-find'
 import { ChatFindBar } from './ChatFindBar'
 
 const CHAT_HTML = '<p>the cat sat</p><p>a dog</p><p>another cat here</p><p>last cat</p>'
@@ -35,23 +36,26 @@ beforeEach(() => {
 
   highlightRegistry = new Map()
   class FakeHighlight {
-    ranges: Range[]
+    ranges: Range[] = []
     priority = 0
-    constructor(...ranges: Range[]) { this.ranges = ranges }
+    add(range: Range) { this.ranges.push(range) }
   }
   vi.stubGlobal('Highlight', FakeHighlight)
   vi.stubGlobal('CSS', { highlights: highlightRegistry })
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
-function Harness({ onClose = () => {}, focusRequest = 0, html = CHAT_HTML }: { onClose?: () => void; focusRequest?: number; html?: string }) {
+interface HarnessProps { onClose?: () => void; onReveal?: () => void; focusRequest?: number; html?: string }
+
+function Harness({ onClose = () => {}, onReveal, focusRequest = 0, html = CHAT_HTML }: HarnessProps) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   return (
     <>
-      <ChatFindBar scrollerRef={scrollerRef} focusRequest={focusRequest} onClose={onClose} />
+      <ChatFindBar scrollerRef={scrollerRef} focusRequest={focusRequest} onClose={onClose} onReveal={onReveal} />
       <div ref={scrollerRef} data-testid="scroller" dangerouslySetInnerHTML={{ __html: html }} />
     </>
   )
@@ -236,6 +240,97 @@ describe('ChatFindBar', () => {
 
     await waitFor(() => expect(count()).toBe('1 of 4'))
     expect(scrolledTo).toHaveLength(scrollsBefore)
+  })
+
+  it('closes on Escape from its buttons too, not only from the search box', () => {
+    const onClose = vi.fn()
+    const windowKeyDown = vi.fn()
+    window.addEventListener('keydown', windowKeyDown)
+    render(<Harness onClose={onClose} />)
+    search('cat')
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /next match/i }), { key: 'Escape' })
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(windowKeyDown).not.toHaveBeenCalled()
+    window.removeEventListener('keydown', windowKeyDown)
+  })
+
+  it('does not jump to the next match when Enter only confirms an input-method composition', () => {
+    render(<Harness />)
+    search('cat')
+
+    fireEvent.keyDown(findInput(), { key: 'Enter', isComposing: true })
+
+    expect(count()).toBe('1 of 3')
+  })
+
+  it('says when there are more matches than it will follow, instead of a count that looks exact', () => {
+    render(<Harness html={`<p>${'e'.repeat(MAX_FIND_MATCHES + 100)}</p>`} />)
+
+    search('e')
+
+    expect(count()).toBe(`1 of ${MAX_FIND_MATCHES}+`)
+  })
+
+  it('tells the chat when it moves the view on purpose, but not when it only refreshes', async () => {
+    const onReveal = vi.fn()
+    render(<Harness onReveal={onReveal} />)
+
+    search('cat')
+    expect(onReveal).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(findInput(), { key: 'Enter' })
+    expect(onReveal).toHaveBeenCalledTimes(2)
+
+    act(() => {
+      const streamed = document.createElement('p')
+      streamed.textContent = 'one more cat'
+      screen.getByTestId('scroller').appendChild(streamed)
+    })
+    await waitFor(() => expect(count()).toBe('2 of 4'))
+    expect(onReveal).toHaveBeenCalledTimes(2)
+  })
+
+  describe('while a reply streams', () => {
+    const streamAMatchEvery = async (milliseconds: number, times: number) => {
+      for (let i = 0; i < times; i += 1) {
+        await act(async () => {
+          const streamed = document.createElement('p')
+          streamed.textContent = 'cat'
+          screen.getByTestId('scroller').appendChild(streamed)
+          await vi.advanceTimersByTimeAsync(milliseconds)
+        })
+      }
+    }
+    const total = () => Number(count()?.split(' of ')[1])
+
+    it('keeps the count current while text is still arriving, not only once it goes quiet', async () => {
+      vi.useFakeTimers()
+      render(<Harness />)
+      search('cat')
+
+      // Tokens arrive faster than the refresh delay, so a refresh that waits for a quiet moment never runs.
+      await streamAMatchEvery(50, 10)
+
+      expect(total()).toBeGreaterThan(3)
+    })
+
+    it('stays on the same match when text arrives above it', async () => {
+      vi.useFakeTimers()
+      render(<Harness />)
+      search('cat')
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      expect(count()).toBe('2 of 3')
+
+      await act(async () => {
+        const earlier = document.createElement('p')
+        earlier.textContent = 'a cat that arrived first'
+        screen.getByTestId('scroller').prepend(earlier)
+        await vi.advanceTimersByTimeAsync(300)
+      })
+
+      expect(count()).toBe('3 of 4')
+    })
   })
 
   it('selects the existing search text when asked to focus again, so typing replaces it', () => {

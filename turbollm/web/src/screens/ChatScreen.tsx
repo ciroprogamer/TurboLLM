@@ -75,6 +75,13 @@ function truncateName(name: string): string {
   return name.length > PLACEHOLDER_NAME_MAX ? `${name.slice(0, PLACEHOLDER_NAME_MAX - 1)}…` : name
 }
 
+// Ctrl+F is "forward one character" in a Mac text field, so on a Mac only Cmd+F opens find.
+function isFindShortcut(e: KeyboardEvent): boolean {
+  // `key` is undefined on the keydown events browser autofill fires, so it cannot be assumed a string.
+  if (e.shiftKey || e.altKey || e.key?.toLowerCase() !== 'f') return false
+  return e.metaKey || (e.ctrlKey && !/Mac/i.test(navigator.platform))
+}
+
 export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; convIdOverride?: string } = {}) {
   const { data: status } = useStatus()
   const model = status?.model
@@ -129,6 +136,9 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
     setFindOpen(true)
     setFindFocusRequest((request) => request + 1)
   }
+  // A search belongs to the chat it was typed in: leaving that chat closes it, so its text and
+  // position are not carried into another conversation.
+  useEffect(() => { setFindOpen(false) }, [activeId])
   const [sidebarOpen, setSidebarOpen] = useWorkspaceSidebarOpen()
   // Below md the sidebar is an off-canvas drawer, hidden until opened from the header.
   const isDesktop = useIsDesktop()
@@ -496,7 +506,7 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
         handleNew()
         return
       }
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F') && activeId) {
+      if (isFindShortcut(e) && activeId) {
         e.preventDefault()
         openFind()
         return
@@ -1204,7 +1214,16 @@ export function ChatScreen({ embedded, convIdOverride }: { embedded?: boolean; c
           )}
         </div>
 
-        {findOpen && <ChatFindBar scrollerRef={scrollerRef} focusRequest={findFocusRequest} onClose={() => setFindOpen(false)} />}
+        {findOpen && (
+          <ChatFindBar
+            scrollerRef={scrollerRef}
+            focusRequest={findFocusRequest}
+            onClose={() => setFindOpen(false)}
+            // Jumping to a match is the reader scrolling: without this, a token arriving before the
+            // scroll event does would send a streaming chat straight back to the bottom.
+            onReveal={() => { userScrolledUp.current = true }}
+          />
+        )}
 
         {/* Message list — always visible; empty state shown only when no messages */}
         <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">

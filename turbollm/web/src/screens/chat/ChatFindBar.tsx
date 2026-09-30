@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
 import { Button } from '../../components/ui/button'
-import { clearFindHighlights, findTextRanges, paintFindHighlights, scrollMatchIntoView } from '../../lib/chat-find'
+import { clearFindHighlights, findTextRanges, MAX_FIND_MATCHES, paintFindHighlights, scrollMatchIntoView } from '../../lib/chat-find'
 
 const STREAMING_REFRESH_DELAY_MS = 150
 
@@ -9,37 +9,42 @@ interface ChatFindBarProps {
   scrollerRef: RefObject<HTMLElement | null>
   focusRequest: number
   onClose: () => void
+  /** Called just before find scrolls the chat to a match, so the screen knows the reader moved the view. */
+  onReveal?: () => void
 }
 
-export function ChatFindBar({ scrollerRef, focusRequest, onClose }: ChatFindBarProps) {
+export function ChatFindBar({ scrollerRef, focusRequest, onClose, onReveal }: ChatFindBarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const { query, matches, currentIndex, search, step } = useChatFind(scrollerRef)
+  const { query, matches, currentIndex, search, step } = useChatFind(scrollerRef, onReveal)
 
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
   }, [focusRequest])
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      step(event.shiftKey ? -1 : 1)
-    } else if (event.key === 'Escape') {
-      event.stopPropagation()
-      onClose()
-    }
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    step(event.shiftKey ? -1 : 1)
+  }
+
+  // On the whole bar, not just the input: after clicking Next or Close the focus is on a button.
+  const handleBarKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Escape') return
+    event.stopPropagation()
+    onClose()
   }
 
   const nothingToStepTo = matches.length === 0
 
   return (
-    <div role="search" className="flex shrink-0 items-center gap-1.5 border-b border-border bg-panel px-3 py-1.5 md:px-8">
+    <div role="search" onKeyDown={handleBarKeyDown} className="flex shrink-0 items-center gap-1.5 border-b border-border bg-panel px-3 py-1.5 md:px-8">
       <Search size={14} className="shrink-0 text-muted" />
       <input
         ref={inputRef}
         value={query}
         onChange={(event) => search(event.target.value)}
-        onKeyDown={handleKeyDown}
+        onKeyDown={handleInputKeyDown}
         placeholder="Find in chat"
         aria-label="Find in chat"
         spellCheck={false}
@@ -65,18 +70,23 @@ export function ChatFindBar({ scrollerRef, focusRequest, onClose }: ChatFindBarP
 
 function describeMatches(query: string, matchCount: number, currentIndex: number): string {
   if (!query) return ''
-  return matchCount === 0 ? 'No results' : `${currentIndex + 1} of ${matchCount}`
+  if (matchCount === 0) return 'No results'
+  const total = matchCount >= MAX_FIND_MATCHES ? `${matchCount}+` : `${matchCount}`
+  return `${currentIndex + 1} of ${total}`
 }
 
-function useChatFind(scrollerRef: RefObject<HTMLElement | null>) {
+function useChatFind(scrollerRef: RefObject<HTMLElement | null>, onReveal: (() => void) | undefined) {
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState<Range[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const latestQuery = useRef('')
+  const currentMatch = useRef<Range | undefined>(undefined)
 
   const reveal = (match: Range | undefined) => {
     const scroller = scrollerRef.current
-    if (match && scroller) scrollMatchIntoView(match, scroller)
+    if (!match || !scroller) return
+    onReveal?.()
+    scrollMatchIntoView(match, scroller)
   }
 
   const search = (nextQuery: string) => {
@@ -98,10 +108,11 @@ function useChatFind(scrollerRef: RefObject<HTMLElement | null>) {
   useEffect(() => {
     return keepMatchesCurrent(scrollerRef, latestQuery, (found) => {
       setMatches(found)
-      setCurrentIndex((index) => Math.min(index, Math.max(found.length - 1, 0)))
+      setCurrentIndex(indexOfMatchAtOrAfter(found, currentMatch.current))
     })
   }, [scrollerRef])
 
+  useEffect(() => { currentMatch.current = matches[currentIndex] }, [matches, currentIndex])
   useEffect(() => { paintFindHighlights(matches, currentIndex) }, [matches, currentIndex])
   useEffect(() => clearFindHighlights, [])
 
@@ -113,8 +124,17 @@ function findMatches(scrollerRef: RefObject<HTMLElement | null>, query: string):
   return scroller ? findTextRanges(scroller, query) : []
 }
 
+// After the chat changes, stay on the match the reader was on (or the next one after it), not on the
+// same number: new text above it shifts every number, and the highlight would silently move elsewhere.
+function indexOfMatchAtOrAfter(found: Range[], previous: Range | undefined): number {
+  if (!previous || !previous.startContainer.isConnected) return 0
+  const index = found.findIndex((match) => previous.compareBoundaryPoints(Range.START_TO_START, match) <= 0)
+  return index === -1 ? Math.max(found.length - 1, 0) : index
+}
+
 // New text keeps arriving while a reply streams, so the matches are refreshed as the chat changes.
-// This never scrolls: the view stays wherever the reader put it.
+// The refresh runs at most once per delay, not once things go quiet: tokens can arrive faster than
+// that delay for the whole reply. It never scrolls: the view stays wherever the reader put it.
 function keepMatchesCurrent(
   scrollerRef: RefObject<HTMLElement | null>,
   latestQuery: RefObject<string>,
@@ -125,8 +145,11 @@ function keepMatchesCurrent(
 
   let pendingRefresh: number | undefined
   const observer = new MutationObserver(() => {
-    window.clearTimeout(pendingRefresh)
-    pendingRefresh = window.setTimeout(() => onMatches(findMatches(scrollerRef, latestQuery.current)), STREAMING_REFRESH_DELAY_MS)
+    if (pendingRefresh !== undefined) return
+    pendingRefresh = window.setTimeout(() => {
+      pendingRefresh = undefined
+      onMatches(findMatches(scrollerRef, latestQuery.current))
+    }, STREAMING_REFRESH_DELAY_MS)
   })
   observer.observe(scroller, { childList: true, subtree: true, characterData: true })
 

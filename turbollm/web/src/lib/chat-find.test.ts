@@ -2,7 +2,7 @@
 // bar — matching text in a rendered message list, and painting the matches with the browser's
 // CSS Custom Highlight API (which never touches the markdown DOM, unlike wrapping matches in <mark>).
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearFindHighlights, findTextRanges, paintFindHighlights, scrollMatchIntoView } from './chat-find'
+import { clearFindHighlights, findTextRanges, MAX_FIND_MATCHES, paintFindHighlights, scrollMatchIntoView } from './chat-find'
 
 function messageList(html: string): HTMLElement {
   const root = document.createElement('div')
@@ -72,12 +72,77 @@ describe('findTextRanges', () => {
 
     expect(findTextRanges(root, 'visible')).toHaveLength(1)
   })
+
+  it('does not count text nobody can see: a hidden element, or the text inside an edit box', () => {
+    const root = messageList('<p>cat</p><div hidden>cat</div><textarea>cat</textarea>')
+
+    expect(findTextRanges(root, 'cat')).toHaveLength(1)
+  })
+
+  it('stops at a limit, so a one-letter search in a huge chat cannot make tens of thousands of ranges', () => {
+    const root = messageList(`<p>${'e'.repeat(MAX_FIND_MATCHES + 500)}</p>`)
+
+    expect(findTextRanges(root, 'e')).toHaveLength(MAX_FIND_MATCHES)
+  })
+})
+
+// Markdown splits one line of text across elements (bold, inline code, syntax-highlighted tokens),
+// so text the reader sees as one phrase is several text nodes. Find has to see the phrase.
+describe('findTextRanges across formatting', () => {
+  it('finds a phrase that runs across a highlighted code line', () => {
+    const root = messageList('<pre><code><span class="kw">const</span> <span class="id">x</span> = 1</code></pre>')
+
+    const [match] = findTextRanges(root, 'const x')
+
+    expect(match.toString()).toBe('const x')
+  })
+
+  it('finds a phrase that runs into bold text', () => {
+    const root = messageList('<p>the <strong>TurboLLM</strong> is here</p>')
+
+    expect(texts(findTextRanges(root, 'TurboLLM is'))).toEqual(['TurboLLM is'])
+  })
+
+  it('finds a phrase that starts in one formatted piece and ends in another', () => {
+    const root = messageList('<p>run <code>npm test</code> now</p>')
+
+    expect(texts(findTextRanges(root, 'run npm'))).toEqual(['run npm'])
+  })
+
+  it('does not join text from different paragraphs, list items or table cells', () => {
+    const root = messageList('<p>the end</p><p>begins here</p><ul><li>one</li><li>two</li></ul><table><tr><td>a</td><td>b</td></tr></table>')
+
+    expect(findTextRanges(root, 'endbegins')).toEqual([])
+    expect(findTextRanges(root, 'onetwo')).toEqual([])
+    expect(findTextRanges(root, 'ab')).toEqual([])
+  })
+
+  it('still finds several matches, in order, when they sit in different pieces', () => {
+    const root = messageList('<p>cat <em>cat</em> cat</p><p>cat</p>')
+
+    expect(findTextRanges(root, 'cat')).toHaveLength(4)
+  })
 })
 
 // jsdom has no layout, so positions are stated: a match sits `characterOffset * 10` px below the top
 // of the page, and the scroll area starts 100px down, is 400px tall and is scrolled to 300px.
-function layOut(match: Range, top: number) {
-  match.getBoundingClientRect = () => ({ top, height: 20, bottom: top + 20, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) })
+function layOut(match: Range, top: number, across: { left: number; width: number } = { left: 0, width: 0 }) {
+  match.getBoundingClientRect = () => ({ top, height: 20, bottom: top + 20, left: across.left, right: across.left + across.width, width: across.width, x: across.left, y: top, toJSON: () => ({}) })
+}
+
+/** A box inside the chat that scrolls on its own (a thinking block, a code block, tool output). */
+function innerScrollBox(element: HTMLElement, box: { top: number; height: number; left: number; width: number }, content: { height: number; width: number }, overflow: 'auto' | 'visible' = 'auto') {
+  element.style.overflowX = overflow
+  element.style.overflowY = overflow
+  Object.defineProperties(element, {
+    scrollTop: { value: 0, writable: true },
+    scrollLeft: { value: 0, writable: true },
+    clientHeight: { value: box.height },
+    clientWidth: { value: box.width },
+    scrollHeight: { value: content.height },
+    scrollWidth: { value: content.width },
+  })
+  element.getBoundingClientRect = () => ({ ...box, bottom: box.top + box.height, right: box.left + box.width, x: box.left, y: box.top, toJSON: () => ({}) })
 }
 
 function scrollAreaAt(scrollTop: number): { scroller: HTMLElement; scrollTo: ReturnType<typeof vi.fn> } {
@@ -122,6 +187,63 @@ describe('scrollMatchIntoView', () => {
     expect(targets).toEqual([...targets].sort((a, b) => a - b))
   })
 
+  it('scrolls a thinking block, code block or tool output that holds the match, so the match is not hidden inside it', () => {
+    const root = messageList('<pre>line one\nline two, find me here</pre>')
+    const block = root.querySelector('pre') as HTMLElement
+    innerScrollBox(block, { top: 1000, height: 250, left: 0, width: 600 }, { height: 5000, width: 600 })
+    const [match] = findTextRanges(root, 'find me')
+    layOut(match, 4000)
+    const { scroller, scrollTo } = scrollAreaAt(0)
+
+    scrollMatchIntoView(match, scroller)
+
+    // The match's middle (4010) sits 2885px below the block's middle (1125).
+    expect(block.scrollTop).toBe(2885)
+    expect(scrollTo).toHaveBeenCalled()
+  })
+
+  it('scrolls a long code line sideways to the match', () => {
+    const root = messageList('<pre>a very long line of code with the needle at the far end</pre>')
+    const block = root.querySelector('pre') as HTMLElement
+    innerScrollBox(block, { top: 1000, height: 100, left: 100, width: 500 }, { height: 100, width: 3000 })
+    const [match] = findTextRanges(root, 'needle')
+    layOut(match, 1010, { left: 2500, width: 40 })
+    const { scroller } = scrollAreaAt(0)
+
+    scrollMatchIntoView(match, scroller)
+
+    // The match's middle (2520) sits 2170px right of the block's middle (350).
+    expect(block.scrollLeft).toBe(2170)
+    expect(block.scrollTop).toBe(0)
+  })
+
+  it('leaves alone a box that is not a scroll area, even if its content is taller than it is', () => {
+    const root = messageList('<div><p>find me here</p></div>')
+    const wrapper = root.querySelector('div') as HTMLElement
+    innerScrollBox(wrapper, { top: 1000, height: 100, left: 0, width: 600 }, { height: 900, width: 600 }, 'visible')
+    const [match] = findTextRanges(root, 'me')
+    layOut(match, 1500)
+    const { scroller } = scrollAreaAt(0)
+
+    scrollMatchIntoView(match, scroller)
+
+    expect(wrapper.scrollTop).toBe(0)
+  })
+
+  it('leaves alone a scroll area whose content fits', () => {
+    const root = messageList('<pre>find me here</pre>')
+    const block = root.querySelector('pre') as HTMLElement
+    innerScrollBox(block, { top: 1000, height: 250, left: 0, width: 600 }, { height: 250, width: 600 })
+    const [match] = findTextRanges(root, 'me')
+    layOut(match, 1100)
+    const { scroller } = scrollAreaAt(0)
+
+    scrollMatchIntoView(match, scroller)
+
+    expect(block.scrollTop).toBe(0)
+    expect(block.scrollLeft).toBe(0)
+  })
+
   it('does not scroll to a match that has no position on screen', () => {
     const root = messageList('<p>find me here</p>')
     const [match] = findTextRanges(root, 'me')
@@ -139,9 +261,15 @@ interface FakeHighlights extends Map<string, { ranges: Range[]; priority: number
 function stubHighlightApi(): FakeHighlights {
   const registry: FakeHighlights = new Map()
   class FakeHighlight {
-    ranges: Range[]
+    ranges: Range[] = []
     priority = 0
-    constructor(...ranges: Range[]) { this.ranges = ranges }
+    // The real constructor takes its ranges as arguments, and a browser runs out of stack when they
+    // are spread from a big enough array (about 62,000 in Chromium 152), which blanked the app.
+    constructor(...ranges: Range[]) {
+      if (ranges.length > 60_000) throw new RangeError('Maximum call stack size exceeded')
+      this.ranges = ranges
+    }
+    add(range: Range) { this.ranges.push(range) }
   }
   vi.stubGlobal('Highlight', FakeHighlight)
   vi.stubGlobal('CSS', { highlights: registry })
@@ -159,6 +287,17 @@ describe('paintFindHighlights', () => {
     expect(registry.get('tllm-find')?.ranges).toEqual(ranges)
     expect(registry.get('tllm-find-active')?.ranges).toEqual([ranges[1]])
     expect(registry.get('tllm-find-active')!.priority).toBeGreaterThan(registry.get('tllm-find')!.priority)
+  })
+
+  it('paints a very large number of matches without running out of stack', () => {
+    const registry = stubHighlightApi()
+    const root = messageList('<p>ab</p>')
+    const oneMatch = findTextRanges(root, 'ab')[0]
+    const ranges = Array.from({ length: 70_000 }, () => oneMatch.cloneRange())
+
+    expect(() => paintFindHighlights(ranges, 0)).not.toThrow()
+
+    expect(registry.get('tllm-find')?.ranges).toHaveLength(70_000)
   })
 
   it('clears both highlights', () => {

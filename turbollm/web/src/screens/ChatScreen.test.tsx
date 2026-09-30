@@ -133,6 +133,9 @@ async function renderOpenConversation() {
 }
 
 const findBox = () => screen.queryByRole('textbox', { name: /find in chat/i })
+// The first render of this heavy screen is slow when the machine is busy (several test files at once),
+// so wait well past the default one second rather than fail on a slow start.
+const findBoxAppears = () => waitFor(() => expect(findBox()).not.toBeNull(), { timeout: 5000 })
 const pressFindShortcut = (init: KeyboardEventInit = { key: 'f', ctrlKey: true }) => {
   const event = new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true })
   window.dispatchEvent(event)
@@ -149,7 +152,7 @@ describe('ChatScreen — find in chat', () => {
 
     const event = pressFindShortcut()
 
-    await waitFor(() => expect(findBox()).not.toBeNull())
+    await findBoxAppears()
     expect(event.defaultPrevented).toBe(true)
   })
 
@@ -158,7 +161,7 @@ describe('ChatScreen — find in chat', () => {
 
     pressFindShortcut({ key: 'F', metaKey: true })
 
-    await waitFor(() => expect(findBox()).not.toBeNull())
+    await findBoxAppears()
   })
 
   it('leaves Ctrl+F to the browser when no conversation is open', async () => {
@@ -173,18 +176,58 @@ describe('ChatScreen — find in chat', () => {
     expect(findBox()).toBeNull()
   })
 
+  it('leaves Ctrl+F alone on a Mac, where it moves the cursor in a text field, but Cmd+F still opens find', async () => {
+    const platform = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    try {
+      await renderOpenConversation()
+
+      const ctrlF = pressFindShortcut({ key: 'f', ctrlKey: true })
+      expect(ctrlF.defaultPrevented).toBe(false)
+      expect(findBox()).toBeNull()
+
+      pressFindShortcut({ key: 'f', metaKey: true })
+      await findBoxAppears()
+    } finally {
+      platform.mockRestore()
+    }
+  })
+
+  it('ignores a keydown that has no key, as browser autofill fires, instead of throwing', async () => {
+    await renderOpenConversation()
+    const onError = vi.fn()
+    window.addEventListener('error', onError)
+    const autofill = new KeyboardEvent('keydown', { ctrlKey: true, bubbles: true, cancelable: true })
+    Object.defineProperty(autofill, 'key', { value: undefined })
+
+    window.dispatchEvent(autofill)
+
+    window.removeEventListener('error', onError)
+    expect(onError).not.toHaveBeenCalled()
+    expect(findBox()).toBeNull()
+  })
+
+  it('closes the find bar when the chat it was searching is left, so it cannot carry a search into another chat', async () => {
+    await renderOpenConversation()
+    pressFindShortcut()
+    await findBoxAppears()
+
+    pressFindShortcut({ key: 'n', ctrlKey: true })
+
+    await waitFor(() => expect(findBox()).toBeNull())
+  })
+
   it('opens the find bar from a header button, for phones and mice', async () => {
     await renderOpenConversation()
 
     fireEvent.click(screen.getByRole('button', { name: /find in chat/i }))
 
-    await waitFor(() => expect(findBox()).not.toBeNull())
+    await findBoxAppears()
   })
 
   it('closes the find bar on Escape', async () => {
     await renderOpenConversation()
     pressFindShortcut()
-    await waitFor(() => expect(findBox()).not.toBeNull())
+    await findBoxAppears()
 
     fireEvent.keyDown(findBox()!, { key: 'Escape' })
 
@@ -194,7 +237,7 @@ describe('ChatScreen — find in chat', () => {
   it('brings the cursor back to the box when Ctrl+F is pressed while it is already open', async () => {
     await renderOpenConversation()
     pressFindShortcut()
-    await waitFor(() => expect(findBox()).not.toBeNull())
+    await findBoxAppears()
     ;(document.activeElement as HTMLElement).blur()
 
     pressFindShortcut()
@@ -205,7 +248,7 @@ describe('ChatScreen — find in chat', () => {
   it('searches the messages the chat actually shows', async () => {
     await renderOpenConversation()
     pressFindShortcut()
-    await waitFor(() => expect(findBox()).not.toBeNull())
+    await findBoxAppears()
 
     fireEvent.change(findBox()!, { target: { value: 'cat' } })
 

@@ -5,6 +5,12 @@ import { clearFindHighlights, findTextRanges, liveRangeOf, MAX_FIND_MATCHES, pai
 
 const STREAMING_REFRESH_DELAY_MS = 150
 
+/** The match the reader is on, and its number, for finding their place again after the chat changes. */
+interface CurrentMatch {
+  match: StaticRange
+  index: number
+}
+
 interface ChatFindBarProps {
   scrollerRef: RefObject<HTMLElement | null>
   focusRequest: number
@@ -30,8 +36,11 @@ export function ChatFindBar({ scrollerRef, focusRequest, onClose, onReveal }: Ch
 
   // On the whole bar, not just the input: after clicking Next or Close the focus is on a button.
   const handleBarKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
+    if (event.key !== 'Escape') return
+    // Always stop it here: the chat's own Escape handler stops a running reply. An Escape that only
+    // cancels an input-method composition (Safari reports it as keyCode 229) must do neither.
     event.stopPropagation()
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return
     onClose()
   }
 
@@ -80,7 +89,7 @@ function useChatFind(scrollerRef: RefObject<HTMLElement | null>, onReveal: (() =
   const [matches, setMatches] = useState<StaticRange[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const latestQuery = useRef('')
-  const currentMatch = useRef<StaticRange | undefined>(undefined)
+  const currentMatch = useRef<CurrentMatch | undefined>(undefined)
 
   const reveal = (match: StaticRange | undefined) => {
     const scroller = scrollerRef.current
@@ -112,7 +121,10 @@ function useChatFind(scrollerRef: RefObject<HTMLElement | null>, onReveal: (() =
     })
   }, [scrollerRef])
 
-  useEffect(() => { currentMatch.current = matches[currentIndex] }, [matches, currentIndex])
+  useEffect(() => {
+    const match = matches[currentIndex]
+    currentMatch.current = match && { match, index: currentIndex }
+  }, [matches, currentIndex])
   useEffect(() => { paintFindHighlights(matches, currentIndex) }, [matches, currentIndex])
   useEffect(() => clearFindHighlights, [])
 
@@ -126,9 +138,12 @@ function findMatches(scrollerRef: RefObject<HTMLElement | null>, query: string):
 
 // After the chat changes, stay on the match the reader was on (or the next one after it), not on the
 // same number: new text above it shifts every number, and the highlight would silently move elsewhere.
-function indexOfMatchAtOrAfter(found: StaticRange[], previous: StaticRange | undefined): number {
-  const where = previous && liveRangeOf(previous)
-  if (!where) return 0
+function indexOfMatchAtOrAfter(found: StaticRange[], previous: CurrentMatch | undefined): number {
+  if (!previous) return 0
+  const where = liveRangeOf(previous.match)
+  // Its text has left the page. A finished reply does that: it moves from the live bubble into the
+  // message list, the same words in new nodes. Keep the number, which is right when the text is the same.
+  if (!where) return Math.min(previous.index, Math.max(found.length - 1, 0))
   where.collapse(true)
   // Matches are in document order, so the first one starting at or after this point is found by halving.
   let low = 0

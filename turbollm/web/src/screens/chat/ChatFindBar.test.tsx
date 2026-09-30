@@ -256,13 +256,23 @@ describe('ChatFindBar', () => {
     window.removeEventListener('keydown', windowKeyDown)
   })
 
-  it('does not close when Escape only cancels an input-method composition', () => {
+  // Escape that only cancels an input-method composition must neither close the bar nor reach the
+  // chat's own Escape handler, which stops a running reply. Safari sends the composition-ending
+  // keydown after `compositionend` with isComposing false, but with keyCode 229.
+  it.each([
+    ['is composing', { key: 'Escape', isComposing: true }],
+    ['ends a composition in Safari', { key: 'Escape', keyCode: 229 }],
+  ])('does not close, or stop a running reply, when Escape %s', (_name, keyEvent) => {
     const onClose = vi.fn()
+    const windowKeyDown = vi.fn()
+    window.addEventListener('keydown', windowKeyDown)
     render(<Harness onClose={onClose} />)
 
-    fireEvent.keyDown(findInput(), { key: 'Escape', isComposing: true })
+    fireEvent.keyDown(findInput(), keyEvent)
 
+    window.removeEventListener('keydown', windowKeyDown)
     expect(onClose).not.toHaveBeenCalled()
+    expect(windowKeyDown).not.toHaveBeenCalled()
   })
 
   it('does not jump to the next match when Enter only confirms an input-method composition', () => {
@@ -349,6 +359,25 @@ describe('ChatFindBar', () => {
 
       fireEvent.keyDown(findInput(), { key: 'Enter' })
       expect(count()).toBe('1 of 4')
+    })
+
+    // A finished reply moves from the live bubble into the message list: the same words, in new DOM
+    // nodes. The reader's place must survive that, not jump back to "1 of N".
+    it('stays on the same match number when the matched text is replaced by an identical copy, as a finished reply is', async () => {
+      vi.useFakeTimers()
+      render(<Harness html="<p>cat zero</p><p>cat one</p><p>cat two</p>" />)
+      search('cat')
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      fireEvent.keyDown(findInput(), { key: 'Enter' })
+      expect(count()).toBe('3 of 3')
+      const current = screen.getByTestId('scroller').querySelectorAll('p')[2]
+
+      await act(async () => {
+        current.replaceWith(current.cloneNode(true))
+        await vi.advanceTimersByTimeAsync(300)
+      })
+
+      expect(count()).toBe('3 of 3')
     })
 
     it('stays on the same match when text arrives above it', async () => {

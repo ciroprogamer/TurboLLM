@@ -73,6 +73,19 @@ test('PATCH /code/sessions/:id/title keeps a name to one line of at most 120 cha
   assert.equal(title.length, 120)
 })
 
+test('PATCH /code/sessions/:id/title does not leave the name ending in a space, or with half an emoji, where it is cut', async () => {
+  const { app, db } = makeApp()
+  const id = await createSession(app)
+
+  await rename(app, id, `${'a'.repeat(119)} b`)
+  assert.equal(db.getAgentRun(id)?.title, 'a'.repeat(119))
+
+  await rename(app, id, `${'a'.repeat(119)}😀😀`)
+  const title = db.getAgentRun(id)?.title ?? ''
+  assert.equal(title, `${'a'.repeat(119)}😀`)
+  assert.equal(Array.from(title).length, 120)
+})
+
 test('PATCH /code/sessions/:id/title reports the name it actually stored', async () => {
   const { app } = makeApp()
   const id = await createSession(app)

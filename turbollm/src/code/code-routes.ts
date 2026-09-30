@@ -46,9 +46,11 @@ const VALID_MODES = new Set<CodeMode>(['auto', 'plan', 'ask'])
 /** The Session name box in the web UI stops at this many characters; the API holds the same limit. */
 const MAX_SESSION_TITLE_LENGTH = 120
 
-/** A name a person gave a session: one line, at most MAX_SESSION_TITLE_LENGTH long; '' if it is not text. */
+/** A name a person gave a session: one line, at most MAX_SESSION_TITLE_LENGTH characters (counted as
+ *  characters, so an emoji is never cut in half), not ending in a space; '' if it is not text. */
 function cleanSessionTitle(value: unknown): string {
-  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, MAX_SESSION_TITLE_LENGTH) : ''
+  if (typeof value !== 'string') return ''
+  return Array.from(value.replace(/\s+/g, ' ').trim()).slice(0, MAX_SESSION_TITLE_LENGTH).join('').trimEnd()
 }
 
 /** Pure validation for POST .../revert (founder bug report, 2026-07-17; corrected same day after

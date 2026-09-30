@@ -1,5 +1,6 @@
 // Internal API routes (/api/v1/*) per spec 02. Thin handlers over config/engines.
 import type { Context, Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { streamSSE } from 'hono/streaming'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -51,7 +52,7 @@ import { ensureLlamafile, llamafileBinPath, llamafileDir } from '../engines/llam
 import { catalogForPlatform, catalogEngine } from '../engines/catalog'
 import { checkBuildPrereqs } from '../engines/build-prereqs'
 import { runBuild, runPrereqInstall, buildDirName, chooseEngineName, findCatalogBuildOnDisk, findEngineForCatalogEntry, findNameConflict, findPriorEngine, isEngineInBuildDir, normRepoUrl, sameRepo, sourceBuildDirOf } from '../engines/build-runner'
-import { installZipEngine, MAX_ZIP_BYTES, packagedAndroidApp, ZipError, zipBuildDirName } from '../engines/zip-install'
+import { gcAbandonedZipInstalls, installZipEngine, MAX_ZIP_BYTES, packagedAndroidApp, SwapBlockedError, ZipError, ZIP_BUILD_MARKER, zipBuildDirName } from '../engines/zip-install'
 import { provisionCuda } from '../engines/cuda-provision'
 import { detectHardware } from '../engines/hardware'
 import { recommendEngines } from '../engines/recommend'
@@ -96,6 +97,12 @@ async function body<T>(c: Context): Promise<T> {
     return {} as T
   }
 }
+
+/** Whether a /engines/zip upload request is currently extracting/probing — module-level
+ *  because engineWorkBusy (every engine-mutating route's guard) reads it from any closure.
+ *  Request-scoped: set synchronously before the body is parsed, cleared in finally, so it
+ *  is always false between requests. */
+let zipUploadInFlight = false
 
 export function registerApi(app: Hono, d: Deps): void {
   // ---- meta ----
@@ -1147,12 +1154,20 @@ export function registerApi(app: Hono, d: Deps): void {
   // Custom-build .zip upload — the third Add-engine source (after the folder scan above
   // and /build/run). One multipart POST carries the archive; the daemon searches it at ANY
   // depth for llama-server, extracts binary + this platform's shared libraries into
-  // {dataDir}/engines/build/<slug>/ (flat, so the Windows loader and the LD_LIBRARY_PATH the
+  // {dataDir}/engines/build/<slug>/ (flat, so the Windows loader and the library path the
   // probe/launch paths already set resolve them — including Android/Termux), chmods the
-  // binary, and probes. Same response shape and registration path as /engines/scan, so the
+  // binary, and probes — into a temporary sibling first, swapping it in only after the
+  // probe succeeded. Same response shape and registration path as /engines/scan, so the
   // Add-engine dialog's confirm step works unchanged, and DELETE ?purge=1 removes the
   // extracted files through the existing sourceBuildDirOf rule — no new delete path.
-  app.post('/api/v1/engines/zip', async (c) => {
+  app.post('/api/v1/engines/zip', bodyLimit({
+    // Content-Length can lie and a chunked request has none — bodyLimit enforces the cap
+    // while the body STREAMS in, before anything is buffered. The 1 MiB slack over
+    // MAX_ZIP_BYTES is the multipart framing, so an exactly-capped archive still reaches
+    // the precise file.size check below.
+    maxSize: MAX_ZIP_BYTES + 1024 * 1024,
+    onError: (c) => err(c, 413, 'zip_too_large', `Engine zips are capped at ${MAX_ZIP_BYTES / (1024 * 1024 * 1024)} GiB.`),
+  }), async (c) => {
     // multipart/form-data needs no CORS preflight, so the /api/* allowlist doesn't stop a
     // cross-site POST — refuse anything a browser marks as coming from another site.
     const site = c.req.header('sec-fetch-site')
@@ -1166,38 +1181,93 @@ export function registerApi(app: Hono, d: Deps): void {
     // refuse up front instead of extracting files that can never run (Termux is unaffected).
     if (packagedAndroidApp())
       return err(c, 501, 'android_packaged_app', 'The packaged Android app cannot run downloaded binaries. Upload this zip from Termux or a desktop install instead.')
-    // Reject an oversized upload before the body is buffered into memory.
-    const declared = Number(c.req.header('content-length') ?? '0')
-    if (declared > MAX_ZIP_BYTES)
-      return err(c, 413, 'zip_too_large', `Engine zips are capped at ${MAX_ZIP_BYTES / (1024 * 1024 * 1024)} GiB.`)
     // Writes under <dataDir>/engines like a provision or a build — never concurrent with either.
     const busy = engineWorkBusy(d)
     if (busy) return err(c, 409, 'engine_already_running', busy)
-    let file: File
+    // Reserve the slot SYNCHRONOUSLY, before the body is parsed: the upload can run for
+    // minutes, and this is what keeps a download, a build, or a second upload (another tab,
+    // a same-named zip) from starting underneath it — every engineWorkBusy caller sees it
+    // until the request ends, the same mutual exclusion /build/run gets from d.build.start.
+    zipUploadInFlight = true
     try {
-      const f = (await c.req.parseBody())['file']
-      if (!(f instanceof File)) return err(c, 400, 'invalid_config_value', 'A multipart form with one "file" field is required.')
-      file = f
-    } catch {
-      return err(c, 400, 'invalid_config_value', 'Could not read the uploaded form data.')
+      let file: File
+      try {
+        const f = (await c.req.parseBody())['file']
+        if (!(f instanceof File)) return err(c, 400, 'invalid_config_value', 'A multipart form with one "file" field is required.')
+        file = f
+      } catch {
+        return err(c, 400, 'invalid_config_value', 'Could not read the uploaded form data.')
+      }
+      if (file.size > MAX_ZIP_BYTES)
+        return err(c, 413, 'zip_too_large', `Engine zips are capped at ${MAX_ZIP_BYTES / (1024 * 1024 * 1024)} GiB.`)
+      const enginesRoot = join(d.store.dir(), 'engines')
+      gcAbandonedZipInstalls(enginesRoot, [...d.registry.list().engines, ...d.registry.customSources()].map((e) => e.binPath))
+      // A same-named zip replaces this flow's OWN prior install in place (rebuild semantics
+      // — proven by the marker installZipEngine writes); any OTHER claim on the folder is
+      // refused instead of deleted: a registered engine that is merely STOPPED would lose
+      // its files (a 1-click git build made before ADR-387 slugs to the bare repo name, so
+      // ik_llama.cpp.zip collides with an ik_llama.cpp build, clone included), and a
+      // remembered custom source is a Disabled engine's Enable path.
+      const targetDir = join(enginesRoot, 'build', zipBuildDirName(file.name))
+      const claims = (p: string) => isEngineInBuildDir(p, targetDir)
+      const occupant =
+        d.registry.list().engines.find((e) => claims(e.binPath)) ??
+        d.registry.customSources().find((s) => claims(s.binPath))
+      if (occupant && !existsSync(join(targetDir, ZIP_BUILD_MARKER)))
+        return err(c, 409, 'build_dir_taken', `The build folder "${zipBuildDirName(file.name)}" already belongs to "${occupant.name}" — rename the zip or delete that engine first.`)
+      // The replace guard runs before the install AND again at the swap (blockSwap): an
+      // engine can be started onto the target files mid-upload.
+      const replaceBlocked = (): string | null => {
+        const r = d.registry.active()
+        return r && engineBusy(d) && isEngineInBuildDir(r.binPath, targetDir)
+          ? `Stop "${r.name}" before replacing its files — the upload extracts over its build folder.`
+          : null
+      }
+      const early = replaceBlocked()
+      if (early) return err(c, 409, 'engine_in_use', early)
+      try {
+        const res = await installZipEngine(enginesRoot, file.name, Buffer.from(await file.arrayBuffer()), { blockSwap: replaceBlocked })
+        // The swap already happened. If a registered engine lives in the target dir this
+        // was the same-named re-upload — the "update my custom build" case — so refresh
+        // THAT engine's probed identity in place (id and name kept; a plain POST /engines
+        // would register a second engine on one binary, and purging either would delete
+        // the files both use) and tell the dialog it was an update rather than a new engine.
+        const prior = res.found ? d.registry.list().engines.find((e) => claims(e.binPath)) : undefined
+        if (res.found && prior) {
+          d.registry.refresh(prior.id, { version: res.version, capabilities: res.capabilities }, res.binPath)
+          return c.json({ ...res, updated: { id: prior.id, name: prior.name } })
+        }
+        return c.json(res)
+      } catch (e) {
+        if (e instanceof SwapBlockedError) return err(c, 409, 'engine_in_use', e.message)
+        if (e instanceof ZipError) return err(c, e.code === 'zip_too_large' ? 413 : 400, e.code, e.message)
+        if (e instanceof ProbeError) return err(c, 400, e.code, e.message)
+        return err(c, 500, 'internal', (e as Error).message)
+      }
+    } finally {
+      zipUploadInFlight = false
     }
-    if (file.size > MAX_ZIP_BYTES)
-      return err(c, 413, 'zip_too_large', `Engine zips are capped at ${MAX_ZIP_BYTES / (1024 * 1024 * 1024)} GiB.`)
+  })
+
+  // Remove an UNCONFIRMED zip extraction — the dialog's best-effort cleanup when it is
+  // dismissed between an upload and Add (the upload already extracted a possibly-hundreds-
+  // of-MB build; nothing registered points at it, so Delete can never reach it). Deliberately
+  // narrow: only a dir this flow created (marker) that no registered engine and no remembered
+  // custom source points into is removed, so a stray call can never delete a real engine's
+  // files; anything unmarked or claimed 409s. Registered before DELETE /engines/:id below —
+  // same registration-order discipline as custom-sources, :id would swallow "zip".
+  app.delete('/api/v1/engines/zip', (c) => {
+    if (!isLocalOrAuthenticated(c, d))
+      return err(c, 403, 'forbidden', 'Uploading an engine zip requires a valid API key from a non-host device.')
     const enginesRoot = join(d.store.dir(), 'engines')
-    // A same-named zip replaces a prior extraction's dir in place (rebuild semantics); refuse
-    // when that dir belongs to the RUNNING engine, exactly like POST /build/run.
-    const targetDir = join(enginesRoot, 'build', zipBuildDirName(file.name))
-    const running = d.registry.active()
-    if (running && engineBusy(d) && isEngineInBuildDir(running.binPath, targetDir))
-      return err(c, 409, 'engine_in_use', `Stop "${running.name}" before replacing its files — the upload extracts over its build folder.`)
-    try {
-      const res = await installZipEngine(enginesRoot, file.name, Buffer.from(await file.arrayBuffer()))
-      return c.json(res)
-    } catch (e) {
-      if (e instanceof ZipError) return err(c, e.code === 'zip_too_large' ? 413 : 400, e.code, e.message)
-      if (e instanceof ProbeError) return err(c, 400, e.code, e.message)
-      return err(c, 500, 'internal', (e as Error).message)
-    }
+    const dir = sourceBuildDirOf(c.req.query('binPath') ?? '', enginesRoot)
+    if (!dir || !existsSync(join(dir, ZIP_BUILD_MARKER)))
+      return err(c, 404, 'engine_not_found', 'No unconfirmed zip install at that path.')
+    const claims = (p: string) => isEngineInBuildDir(p, dir)
+    if (d.registry.list().engines.some((e) => claims(e.binPath)) || d.registry.customSources().some((s) => claims(s.binPath)))
+      return err(c, 409, 'build_dir_taken', 'That install is in use by an engine — delete the engine instead.')
+    rmSync(dir, { recursive: true, force: true })
+    return c.json({ ok: true })
   })
 
   app.put('/api/v1/engines/:id', async (c) => {
@@ -2993,10 +3063,12 @@ function localCountFor(d: Deps, repo: string): number {
   return n
 }
 
-/** A download (engine provision) OR a 1-click build writes under `<dataDir>/engines` and
- *  ends by mutating the registry + flipping the active engine. They must not run at once
- *  (ADR-100). Returns a user-facing message when either is in flight, else null. */
+/** A download (engine provision), a 1-click build, or a .zip upload writes under
+ * `<dataDir>/engines` and ends by mutating the registry + flipping the active engine. They
+ * must not run at once (ADR-100). Returns a user-facing message when either is in flight,
+ * else null. */
 function engineWorkBusy(d: Deps): string | null {
+  if (zipUploadInFlight) return 'An engine zip upload is in progress — wait for it to finish.'
   if (d.provision.get().active) return 'An engine download is in progress — wait for it to finish.'
   if (d.build.isActive()) return 'A build is in progress — wait for it to finish.'
   return null

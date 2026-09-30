@@ -15,6 +15,11 @@ export interface ZipMember {
   lieSize?: number
   /** Overwrite the CRC — the corrupt-archive fixture. */
   crc?: number
+  /** A Unix symlink member (`zip -y`): sets the Unix creator + S_IFLNK external attributes;
+   *  the data becomes the link TARGET path. */
+  symlink?: boolean
+  /** Set the encrypted general-purpose flag bit — the password-protected fixture. */
+  encrypted?: boolean
 }
 
 export function buildZipArchive(members: ZipMember[], opts: { zip64?: boolean } = {}): Buffer {
@@ -32,7 +37,7 @@ export function buildZipArchive(members: ZipMember[], opts: { zip64?: boolean } 
     const lfh = Buffer.alloc(30)
     lfh.writeUInt32LE(0x04034b50, 0)
     lfh.writeUInt16LE(20, 4)
-    lfh.writeUInt16LE(0x0800, 6) // utf-8 names
+    lfh.writeUInt16LE(m.encrypted ? 0x0801 : 0x0800, 6) // utf-8 names (+ encrypted flag)
     lfh.writeUInt16LE(method, 8)
     lfh.writeUInt16LE(0, 10) // mtime
     lfh.writeUInt16LE(0x21, 12) // mdate
@@ -45,9 +50,9 @@ export function buildZipArchive(members: ZipMember[], opts: { zip64?: boolean } 
 
     const cdh = Buffer.alloc(46)
     cdh.writeUInt32LE(0x02014b50, 0)
-    cdh.writeUInt16LE(20, 4)
+    cdh.writeUInt16LE(m.symlink ? (3 << 8) | 20 : 20, 4) // version made by: 3 = Unix
     cdh.writeUInt16LE(20, 6)
-    cdh.writeUInt16LE(0x0800, 8)
+    cdh.writeUInt16LE(m.encrypted ? 0x0801 : 0x0800, 8)
     cdh.writeUInt16LE(method, 10)
     cdh.writeUInt16LE(0, 12)
     cdh.writeUInt16LE(0x21, 14)
@@ -59,7 +64,7 @@ export function buildZipArchive(members: ZipMember[], opts: { zip64?: boolean } 
     cdh.writeUInt16LE(0, 32)
     cdh.writeUInt16LE(0, 34)
     cdh.writeUInt16LE(0, 36)
-    cdh.writeUInt32LE(0, 38)
+    cdh.writeUInt32LE(m.symlink ? (0o120777 << 16) >>> 0 : 0, 38) // Unix mode: S_IFLNK
     cdh.writeUInt32LE(offset, 42)
     central.push(cdh, nameBuf)
 

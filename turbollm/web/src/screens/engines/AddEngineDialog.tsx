@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, CheckCircle2, FileArchive, FolderOpen, Loader2, Plus, SearchX } from 'lucide-react'
-import { ApiError, track } from '../../lib/api'
+import { AlertTriangle, ArrowLeft, CheckCircle2, FileArchive, FolderOpen, Loader2, Plus, SearchX } from 'lucide-react'
+import { ApiError, deleteEngineZipInstall, track } from '../../lib/api'
 import { useEngineMutations, useEngineScan, useEngineZipUpload } from '../../lib/queries'
 import type { EngineScanResult } from '../../lib/types'
 import { Button } from '../../components/ui/button'
@@ -26,6 +26,10 @@ type Step = 'choose' | 'scanning' | 'confirm' | 'notfound'
  *  Graceful fallback when nothing is found. Registration still goes through POST
  *  /api/v1/engines; scan is read-only. Same exported name + trigger as before — the
  *  EnginesScreen call sites are unchanged.
+ *
+ *  The .zip source has one extra outcome: a same-named re-upload replaces an engine this
+ *  flow installed earlier, and the daemon answers `updated` instead — the confirm step
+ *  becomes an "Engine updated" summary with nothing left to Add.
  *
  *  ADR-089 (guided build hand-off): callers can drive the dialog in CONTROLLED mode
  *  (`open` + `onOpenChange`) and prefill the source-repo via `defaultSourceRepo` so the
@@ -57,10 +61,23 @@ export function AddEngineDialog({
   const [scanSource, setScanSource] = useState<'path' | 'zip'>('path')
   const [zipName, setZipName] = useState('')
   const zipInput = useRef<HTMLInputElement>(null)
-  // Confirm-step state, set from a successful scan.
+  // Confirm-step state, set from a successful scan. `updated` is set when the upload
+  // replaced an engine that already lived in that build folder — the daemon refreshed its
+  // registration in place, so there is nothing left to Add; `zipWarning` carries a
+  // non-blocking install caveat (a CUDA build without its cudart runtime).
   const [binPath, setBinPath] = useState('')
   const [version, setVersion] = useState('')
   const [name, setName] = useState('')
+  const [updated, setUpdated] = useState<{ id: string; name: string } | null>(null)
+  const [zipWarning, setZipWarning] = useState<string | null>(null)
+  // Epoch guard: reset() bumps it, so a scan/upload result that lands AFTER the dialog was
+  // dismissed (an upload can outlive the dialog by minutes) is dropped instead of dragging
+  // the reset dialog back to the confirm step on a stale upload.
+  const flow = useRef(0)
+  // The binPath of a zip upload that extracted but hasn't been registered yet — GC'd
+  // (best-effort, server-side marker-verified) when the dialog is dismissed or a new
+  // upload starts, so an abandoned build doesn't sit on disk forever.
+  const pendingZipBin = useRef<string | null>(null)
   // Optional source-repo URL (ADR-088): the GitHub repo this build came from. Lets
   // TurboLLM detect "newer source available → rebuild" by comparing commits.
   const [sourceRepo, setSourceRepo] = useState('')
@@ -80,6 +97,8 @@ export function AddEngineDialog({
   }, [open, defaultSourceRepo])
 
   const reset = () => {
+    flow.current++ // in-flight scan/upload results are now stale
+    gcPendingZip()
     setStep('choose')
     setBrowse(null)
     setScanSource('path')
@@ -87,9 +106,19 @@ export function AddEngineDialog({
     setBinPath('')
     setVersion('')
     setName('')
+    setUpdated(null)
+    setZipWarning(null)
     setSourceRepo('')
     setNameError(null)
     setError(null)
+  }
+
+  // Best-effort removal of an extracted-but-never-registered zip install; the daemon also
+  // GCs abandoned ones on the next upload, this just does it promptly.
+  const gcPendingZip = () => {
+    const bin = pendingZipBin.current
+    pendingZipBin.current = null
+    if (bin) void deleteEngineZipInstall(bin).catch(() => {})
   }
 
   // Route a scan result (folder scan or zip upload — same response shape) to confirm /
@@ -102,6 +131,11 @@ export function AddEngineDialog({
     setBinPath(res.binPath)
     setVersion(res.version)
     setName(res.suggestedName)
+    setUpdated(res.updated ?? null)
+    setZipWarning(res.warning?.message ?? null)
+    // An updated engine is already registered server-side — nothing left to clean up if
+    // the dialog is dismissed from here.
+    pendingZipBin.current = res.updated ? null : res.binPath
     setStep('confirm')
   }
 
@@ -112,9 +146,11 @@ export function AddEngineDialog({
     setNameError(null)
     setScanSource('path')
     setStep('scanning')
+    const token = ++flow.current
     scan.mutate(path, {
-      onSuccess: applyScanResult,
+      onSuccess: (res) => { if (flow.current === token) applyScanResult(res) },
       onError: (e) => {
+        if (flow.current !== token) return
         setError(e instanceof ApiError ? e.message : 'Could not scan that location.')
         setStep('choose')
       },
@@ -131,9 +167,12 @@ export function AddEngineDialog({
     setScanSource('zip')
     setZipName(file.name)
     setStep('scanning')
+    const token = ++flow.current
+    gcPendingZip() // a fresh upload supersedes any unconfirmed one
     zipUpload.mutate(file, {
-      onSuccess: applyScanResult,
+      onSuccess: (res) => { if (flow.current === token) applyScanResult(res) },
       onError: (e) => {
+        if (flow.current !== token) return
         setError(e instanceof ApiError ? e.message : 'Could not read that zip.')
         setStep('choose')
       },
@@ -148,6 +187,8 @@ export function AddEngineDialog({
       { name: name.trim(), binPath, ...(repo ? { sourceRepo: repo } : {}) },
       {
         onSuccess: (eng) => {
+          // Registered — the install is now owned by the engine; reset must not GC it.
+          pendingZipBin.current = null
           // probe_no_version (spec 03 §2): saved but version unknown — non-blocking warning.
           if (eng.warning === 'no_version') {
             toast.warning('Engine added, but its version could not be detected.')
@@ -234,7 +275,7 @@ export function AddEngineDialog({
             </div>
 
             <DialogFooter>
-              <Button variant="outline" onClick={() => { track('engines', 'cancel_add_engine'); setOpen(false) }}>
+              <Button variant="outline" onClick={() => { track('engines', 'cancel_add_engine'); setOpen(false); reset() }}>
                 Cancel
               </Button>
             </DialogFooter>
@@ -255,7 +296,50 @@ export function AddEngineDialog({
           </>
         )}
 
-        {step === 'confirm' && (
+        {step === 'confirm' && updated && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Engine updated</DialogTitle>
+              <DialogDescription>
+                The uploaded build replaced <span className="font-medium text-ink">{updated.name}</span> in place — its files
+                and registration now run the new binary.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2.5 rounded-lg border border-border bg-panel p-3 text-[13px] text-ink">
+                <CheckCircle2 size={16} className="shrink-0" style={{ color: 'var(--ok)' }} />
+                <span>
+                  <span className="font-medium">{updated.name}</span>
+                  {version && version.toLowerCase() !== 'unknown' ? (
+                    <>
+                      {' · '}
+                      <span className="text-muted">{version}</span>
+                    </>
+                  ) : null}
+                </span>
+              </div>
+
+              {zipWarning && (
+                <div className="flex items-start gap-2.5 rounded-lg border p-3 text-[13px]" style={{ borderColor: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)' }}>
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" style={{ color: 'var(--warn)' }} />
+                  <span style={{ color: 'var(--warn)' }}>{zipWarning}</span>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { track('engines', 'back_to_add_engine_choose'); setStep('choose') }}>
+                <ArrowLeft size={16} /> Back
+              </Button>
+              <Button onClick={() => { track('engines', 'done_zip_engine_update'); setOpen(false); reset() }}>
+                Done
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {step === 'confirm' && !updated && (
           <>
             <DialogHeader>
               <DialogTitle>Confirm engine</DialogTitle>
@@ -304,6 +388,13 @@ export function AddEngineDialog({
                   Paste the GitHub repo you built this from — lets TurboLLM tell you when a newer build is available.
                 </span>
               </label>
+
+              {zipWarning && (
+                <div className="flex items-start gap-2.5 rounded-lg border p-3 text-[13px]" style={{ borderColor: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)' }}>
+                  <AlertTriangle size={16} className="mt-0.5 shrink-0" style={{ color: 'var(--warn)' }} />
+                  <span style={{ color: 'var(--warn)' }}>{zipWarning}</span>
+                </div>
+              )}
 
               {error && <InlineError message={error} screen="engines" />}
             </div>

@@ -7,7 +7,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AddEngineDialog } from './AddEngineDialog'
-import { addEngine, ApiError, track, uploadEngineZip } from '../../lib/api'
+import { addEngine, ApiError, deleteEngineZipInstall, track, uploadEngineZip } from '../../lib/api'
 import type { EngineScanResult } from '../../lib/types'
 
 vi.mock('../../lib/api', async (importOriginal) => ({
@@ -15,6 +15,7 @@ vi.mock('../../lib/api', async (importOriginal) => ({
   track: vi.fn(),
   uploadEngineZip: vi.fn(),
   addEngine: vi.fn(),
+  deleteEngineZipInstall: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
 const FOUND: EngineScanResult = {
@@ -107,5 +108,73 @@ describe('AddEngineDialog — .zip upload', () => {
     expect(screen.getByText('emptyfork.zip')).toBeTruthy()
     expect(screen.getByText(/Make sure the zip contains a build for the OS TurboLLM is running on/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Pick the binary directly/ })).toBeNull()
+  })
+
+  it('a same-named re-upload shows the update summary and never registers a second engine', async () => {
+    vi.mocked(uploadEngineZip).mockResolvedValueOnce({ ...FOUND, version: 'b5000', updated: { id: 'e1', name: 'myfork (b4242)' } })
+    wrap(<AddEngineDialog />)
+    await userEvent.click(await screen.findByRole('button', { name: /Add engine/ }))
+    pickZip(new File([new Uint8Array([4])], 'myfork.zip', { type: 'application/zip' }))
+
+    expect(await screen.findByText('Engine updated')).toBeTruthy()
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/now run the new binary/)).toBeTruthy()
+    expect(within(dialog).getByText('b5000')).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: /Add engine/ })).toBeNull()
+    expect(within(dialog).queryByDisplayValue('myfork (b4242)')).toBeNull()
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Done' }))
+    expect(vi.mocked(addEngine)).not.toHaveBeenCalled()
+    expect(vi.mocked(track)).toHaveBeenCalledWith('engines', 'done_zip_engine_update')
+    // The engine is already registered server-side — dismissing must NOT clean up its files.
+    expect(vi.mocked(deleteEngineZipInstall)).not.toHaveBeenCalled()
+  })
+
+  it('shows a CUDA-without-cudart warning on the confirm step without blocking Add', async () => {
+    vi.mocked(uploadEngineZip).mockResolvedValueOnce({
+      ...FOUND,
+      warning: { code: 'missing_cudart', message: 'This CUDA build does not bundle the CUDA runtime (cudart64_*.dll).' },
+    })
+    wrap(<AddEngineDialog />)
+    await userEvent.click(await screen.findByRole('button', { name: /Add engine/ }))
+    pickZip(new File([new Uint8Array([5])], 'cuda.zip', { type: 'application/zip' }))
+
+    expect(await screen.findByText(/does not bundle the CUDA runtime/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Add engine/ })).toBeTruthy()
+  })
+
+  it('cleans up an unconfirmed upload when the dialog is dismissed', async () => {
+    vi.mocked(uploadEngineZip).mockResolvedValueOnce(FOUND)
+    wrap(<AddEngineDialog />)
+    await userEvent.click(await screen.findByRole('button', { name: /Add engine/ }))
+    pickZip(new File([new Uint8Array([6])], 'myfork.zip', { type: 'application/zip' }))
+    await screen.findByText('Confirm engine')
+
+    // Dismiss via the dialog's own close affordance (confirm has no Cancel button).
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(vi.mocked(deleteEngineZipInstall)).toHaveBeenCalledWith(FOUND.binPath))
+    expect(vi.mocked(addEngine)).not.toHaveBeenCalled()
+    // Dismissing resets the dialog — reopening starts over at the choose step.
+    await userEvent.click(await screen.findByRole('button', { name: /Add engine/ }))
+    expect(screen.getByRole('button', { name: /Upload a \.zip/ })).toBeTruthy()
+  })
+
+  it('drops a late upload result that arrives after the dialog was dismissed', async () => {
+    let release!: (v: EngineScanResult) => void
+    vi.mocked(uploadEngineZip).mockReturnValue(new Promise((res) => { release = res }))
+    wrap(<AddEngineDialog />)
+    await userEvent.click(await screen.findByRole('button', { name: /Add engine/ }))
+    pickZip(new File([new Uint8Array([7])], 'bigfork.zip', { type: 'application/zip' }))
+    await screen.findByText(/Uploading & extracting bigfork\.zip/)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    release(FOUND)
+    await new Promise((r) => setTimeout(r, 0))
+    // The stale result must not drag the reset dialog back to the confirm step.
+    expect(screen.queryByText('Confirm engine')).toBeNull()
+    expect(vi.mocked(deleteEngineZipInstall)).not.toHaveBeenCalled()
+    // Reopening starts fresh at the choose step, not on the stale upload's result.
+    await userEvent.click(screen.getByRole('button', { name: /Add engine/ }))
+    expect(screen.getByRole('button', { name: /Upload a \.zip/ })).toBeTruthy()
   })
 })

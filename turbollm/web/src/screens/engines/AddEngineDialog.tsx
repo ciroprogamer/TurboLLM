@@ -191,7 +191,7 @@ export function AddEngineDialog({
               <DialogTitle>Add your own engine</DialogTitle>
               <DialogDescription>
                 Bring any llama.cpp-compatible build or community fork. Pick the folder it lives
-                in, upload its .zip, and we&apos;ll find the server binary for you.
+                in, or upload its .zip, and we&apos;ll find the server binary for you.
               </DialogDescription>
             </DialogHeader>
 

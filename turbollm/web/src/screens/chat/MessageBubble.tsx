@@ -24,8 +24,11 @@ function ThinkingBlock({ reasoning, thinkMs, streaming, showThinking = true }: {
   const [open, setOpen] = useState(false)
   const reasoningRef = useRef<HTMLPreElement>(null)
   const chosenHeight = useThinkingBlockHeight()
-  useRememberDraggedHeight(reasoningRef, open)
-  useFollowStreamingText(reasoningRef, open && !!streaming, reasoning)
+  // The text box only exists while it is open AND thinking is shown; switching the setting off and on
+  // gives a new element, so the hooks must be told, or they keep watching the removed one.
+  const showingText = open && showThinking
+  useRememberDraggedHeight(reasoningRef, showingText)
+  useFollowStreamingText(reasoningRef, showingText && !!streaming, reasoning)
   const label = thinkMs ? `Thought for ${(thinkMs / 1000).toFixed(1)}s` : streaming ? 'Thinking…' : 'Thinking'
   // When thinking is globally hidden, show only the stats line (no expand toggle).
   if (!showThinking) {

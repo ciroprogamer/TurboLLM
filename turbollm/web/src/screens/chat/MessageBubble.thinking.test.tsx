@@ -146,6 +146,25 @@ describe('thinking block', () => {
     expect(blocks[1].style.height).toBe('260px')
   })
 
+  it('still remembers a drag after "show thinking" is switched off and on again with a block open', () => {
+    const message = reasoningMessage(LONG_REASONING)
+    const queryClient = new QueryClient()
+    const bubble = (showThinking: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        <MessageBubble message={message} isLast={false} editingId={null} onEditSave={() => {}} onEditCancel={() => {}} showThinking={showThinking} />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(bubble(true))
+    openThinkingBlock()
+
+    rerender(bubble(false))
+    rerender(bubble(true))
+    const blockNowShown = screen.getByText(/step 0: still weighing/).closest('pre') as HTMLElement
+    dragTo(blockNowShown, '300px')
+
+    expect(store.get(SIZE_KEY)).toBe('300')
+  })
+
   it('shows every line of a long reasoning once opened', () => {
     renderBubble(reasoningMessage(LONG_REASONING))
 

@@ -23,6 +23,10 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [1.14.3] - 2026-09-30
+
 ### Added
 
 - **Find in chat** (GitHub #52). Press Ctrl/Cmd+F in a chat, or use the new search button in its header, to search
@@ -33,15 +37,6 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   kept: the automatically generated title no longer replaces it after the first reply. Leave it empty and the session
   is named after your task as before.
 
-### Fixed
-
-- **Windows: updating TurboLLM no longer stops at "TurboLLM cannot be closed"** (GitHub #250). An update removes the
-  old version by first moving its files into a temporary folder, and a few files deep inside the bundled daemon ended
-  up with paths longer than Windows' 260-character limit there. The move failed on the same file every time, so the
-  update stopped even with nothing running, and Retry could never help. The installer now deletes that folder first,
-  with a delete that works past the limit; the update installs a fresh copy. A few files in the new version are still
-  that deep, so the file-copy step can still show the same message once; Retry there goes through.
-
 ### Changed
 
 - **An open thinking block now grows with the reasoning** instead of scrolling inside a small fixed box, so a fast
@@ -51,6 +46,25 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 - **Windows installer: a running TurboLLM gets about a minute to close**, retried automatically, before the installer
   asks you to close it. If it still can't, what the installer found running is written to
   `%TEMP%\TurboLLM-installer-diagnostic.log`.
+
+### Fixed
+
+- **Windows: updating TurboLLM no longer stops at "TurboLLM cannot be closed"** (GitHub #250). An update removes the
+  old version by first moving its files into a temporary folder, and a few files deep inside the bundled daemon ended
+  up with paths longer than Windows' 260-character limit there. The move failed on the same file every time, so the
+  update stopped even with nothing running, and Retry could never help. The installer now deletes that folder first,
+  with a delete that works past the limit; the update installs a fresh copy. A few files in the new version are still
+  that deep, so the file-copy step can still show the same message once; Retry there goes through.
+
+### Discord
+
+- **Windows update fix.** Updating TurboLLM no longer stops at "TurboLLM cannot be closed" when nothing is running. The
+  cause was over-long file paths inside the old install; the installer now clears them first.
+- **Search inside a chat.** Press Ctrl/Cmd+F (or the new search button in the chat header), and Enter or the arrows
+  jump to each match.
+- **Thinking blocks are resizable.** Drag one's bottom edge to the size you like and every thinking block remembers it.
+- **Name a Code session when you start it.** The launchpad has an optional "Session name" field, and a name you give
+  is kept.
 
 ## [1.14.2] - 2026-09-27
 

@@ -100,6 +100,34 @@ test('POST /api/v1/engines/zip: 403 for a non-host caller on an open, keyless LA
   }
 })
 
+test('POST /api/v1/engines/zip: a cross-site chunked upload is refused before its body is read', async () => {
+  const dir = tmpDir('tllm-zip-route-')
+  try {
+    // No Content-Length, and a body that never ends: the header guards must refuse the
+    // cross-site POST before bodyLimit starts buffering it (a request that stayed chunked
+    // under the cap would otherwise be fully read — gigabytes — before anyone checks who
+    // sent it). With the guards behind bodyLimit this test sees 413, not 403.
+    let pulled = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++
+        controller.enqueue(new Uint8Array(1024 * 1024).fill(0x78))
+      },
+    })
+    const res = await zipApp({}, dir).request('/api/v1/engines/zip', {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'cross-site' },
+      body,
+      duplex: 'half',
+    })
+    assert.equal(res.status, 403)
+    assert.equal((await errorBody(res)).code, 'forbidden')
+    assert.ok(pulled < 4, `the body must not be read before the guards run (pulled ${pulled} MiB)`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('POST /api/v1/engines/zip: 400 when the form has no "file" field', async () => {
   const dir = tmpDir('tllm-zip-route-')
   try {

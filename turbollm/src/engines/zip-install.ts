@@ -470,8 +470,24 @@ export async function installZipEngine(
     const pr = await (opts.probeFn ?? probe)(binPath)
     const blocked = opts.blockSwap?.()
     if (blocked) throw new SwapBlockedError(blocked)
-    rmSync(destDir, { recursive: true, force: true })
-    renameSync(tmpDir, destDir)
+    // Never leave a moment where neither install exists: park the old dir, move the new one
+    // in, and delete the old one only once that worked — moving it back if the rename failed
+    // (on Windows a just-probed .exe can stay locked by antivirus for a moment: EPERM/EBUSY).
+    const parked = existsSync(destDir) ? join(enginesRoot, 'build', `.${slug}-${randomUUID().slice(0, 8)}.old`) : null
+    if (parked) renameSync(destDir, parked)
+    try {
+      renameSync(tmpDir, destDir)
+    } catch (e) {
+      if (parked) renameSync(parked, destDir)
+      throw e
+    }
+    if (parked) {
+      try {
+        rmSync(parked, { recursive: true, force: true })
+      } catch {
+        /* best effort — the new install is already in place; the GC sweep retries */
+      }
+    }
     const finalBin = join(destDir, basename(binPath))
     const warning = missingCudartWarning([...selection.files.keys()])
     return {

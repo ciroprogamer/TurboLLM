@@ -4,8 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { inflateRawSync } from 'node:zlib'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { tmpDir } from '../test-support/tmp'
 import { buildZipArchive, type ZipMember } from '../test-support/zip-archive'
 import {
@@ -396,6 +396,7 @@ test('installZipEngine: a same-named zip replaces a prior extraction in place (r
     assert.ok(res.found)
     assert.equal(existsSync(stale), false, 'the clean-start wipe must remove the old extraction')
     assert.equal(existsSync(res.binPath), true)
+    assert.deepEqual(readdirSync(join(root, 'build')), ['myfork'], 'the parked .old dir must be gone after a successful swap')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -442,6 +443,66 @@ test('installZipEngine: blockSwap refuses the swap mid-flight, keeping the prior
     assert.equal(readFileSync(prior.binPath, 'utf8'), 'old-elf', 'a refused swap must not touch the prior install')
     assert.deepEqual(readdirSync(join(root, 'build')), ['myfork'])
   } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('installZipEngine: a failed final rename restores the parked install — never a moment with neither', async () => {
+  const root = tmpDir('tllm-zip-')
+  try {
+    const prior = await installZipEngine(root, 'myfork.zip', buildZipArchive([member('llama-server', 'old-elf')]), { probeFn: STUB_PROBE })
+    assert.ok(prior.found)
+    await assert.rejects(
+      installZipEngine(root, 'myfork.zip', buildZipArchive([member('llama-server', 'new-elf')]), {
+        // Runs after extraction, right before the swap: remove the temporary dir so the
+        // FINAL rename (tmp → dest) fails the way a Windows EPERM/EBUSY on a just-probed
+        // exe would — the swap must put the parked old install back, not lose it.
+        probeFn: async (bin) => {
+          rmSync(dirname(bin), { recursive: true, force: true })
+          return { version: 'b5000 (0beef)', capabilities: { kvTypes: ['f16'], flags: [], flagInfo: [] } }
+        },
+      }),
+      (e: unknown) => {
+        assert.equal((e as NodeJS.ErrnoException).code, 'ENOENT')
+        return true
+      },
+    )
+    assert.equal(readFileSync(prior.binPath, 'utf8'), 'old-elf', 'the parked install must be restored when the swap fails')
+    assert.deepEqual(readdirSync(join(root, 'build')), ['myfork'], 'no parked .old or temporary dir may linger')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('installZipEngine: a parked dir that cannot be deleted is left for the GC sweep, install still lands', async (t) => {
+  // Removing the parked old install is best-effort by design (the new one is already in
+  // place). POSIX refuses to unlink children of a write-less dir, which is the portable
+  // stand-in for a locked .old; skip where permission bits don't bite (Windows, root).
+  if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) return t.skip()
+  const root = tmpDir('tllm-zip-')
+  let hardened: string | null = null
+  try {
+    const prior = await installZipEngine(root, 'myfork.zip', buildZipArchive([member('llama-server', 'old-elf')]), { probeFn: STUB_PROBE })
+    assert.ok(prior.found)
+    hardened = dirname(prior.binPath)
+    chmodSync(hardened, 0o500) // old install undeletable, still renamable
+    const res = await installZipEngine(root, 'myfork.zip', buildZipArchive([member('llama-server', 'new-elf')]), { probeFn: STUB_PROBE })
+    assert.ok(res.found, 'the upload itself must succeed — the parked dir is only cleanup')
+    assert.equal(readFileSync(res.binPath, 'utf8'), 'new-elf')
+    const leftovers = readdirSync(join(root, 'build')).filter((d) => d !== 'myfork')
+    assert.equal(leftovers.length, 1, 'exactly one parked .old dir remains')
+    assert.match(leftovers[0]!, /^\.myfork-[0-9a-f]{8}\.old$/)
+    // …and the sweep removes it once it is old enough and nothing claims it.
+    chmodSync(join(root, 'build', leftovers[0]!), 0o700)
+    const stale = new Date(Date.now() - 25 * 60 * 60 * 1000)
+    utimesSync(join(root, 'build', leftovers[0]!), stale, stale)
+    gcAbandonedZipInstalls(root, [])
+    assert.deepEqual(readdirSync(join(root, 'build')), ['myfork'])
+  } finally {
+    // Restore write permission first, or the cleanup below cannot remove an early-failure dir.
+    if (hardened) {
+      try { chmodSync(hardened, 0o700) } catch { /* already removed by the sweep */ }
+    }
     rmSync(root, { recursive: true, force: true })
   }
 })

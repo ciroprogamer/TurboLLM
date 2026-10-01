@@ -579,9 +579,19 @@ export function useEngineScan() {
 
 /** Upload a custom build .zip (the Add-engine flow's upload source). Same contract as
  *  {@link useEngineScan} — server-side extraction + probe, registration still via
- *  useEngineMutations().add, so no invalidation here either. */
+ *  useEngineMutations().add — except a same-named re-upload, which refreshes a registered
+ *  engine in place (`updated`) with no Add to follow, so the engine list refetches here. */
 export function useEngineZipUpload() {
-  return useMutation({ mutationFn: (file: File) => uploadEngineZip(file) })
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => uploadEngineZip(file),
+    onSuccess: (res) => {
+      if (res.found && res.updated) {
+        void qc.invalidateQueries({ queryKey: queryKeys.engines })
+        void qc.invalidateQueries({ queryKey: queryKeys.status })
+      }
+    },
+  })
 }
 
 /** Browse a directory for the engine-binary picker (spec 03 §9). `path` is the

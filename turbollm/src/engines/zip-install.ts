@@ -294,7 +294,7 @@ export function pickZipFiles(entries: ZipEntry[], platform: NodeJS.Platform = pr
   const nearerThanAnyRival = (name: string): boolean => {
     const d = dirOf(name)
     const mine = sharedPrefixLen(d, binDir)
-    return [...rivalDirs].every((r) => mine > sharedPrefixLen(d, r))
+    return [...rivalDirs].every((r) => mine >= sharedPrefixLen(d, r))
   }
 
   const files = new Map<string, ZipEntry>()

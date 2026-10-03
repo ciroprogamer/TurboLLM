@@ -466,8 +466,11 @@ export function updateVllm(): Promise<{ accepted: true; engine: 'vllm' }> {
   return request('/api/v1/engines/vllm?update=1', { method: 'POST', json: {} })
 }
 
-/** Update (upgrade) the LiteRT-LM engine to the latest release (passes -U to uv pip install). */
-export function updateLitertLm(): Promise<{ accepted: true; engine: 'litert-lm' }> {
+/** Update (upgrade) the LiteRT-LM engine to the latest release (passes -U to uv pip install).
+ *  The daemon re-checks PyPI first: when the installed release already IS the latest it
+ *  answers `{ accepted: false, alreadyLatest: true, version }` without re-provisioning —
+ *  the same honest refusal the llama.cpp backends make. */
+export function updateLitertLm(): Promise<{ accepted: boolean; alreadyLatest?: boolean; version?: string; engine?: 'litert-lm' }> {
   return request('/api/v1/engines/litert-lm?update=1', { method: 'POST', json: {} })
 }
 

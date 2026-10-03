@@ -33,6 +33,7 @@ import {
   recommendBackendId,
 } from '../engines/download'
 import {
+  computeUpdateStatus,
   normalizeUpdatePolicy,
   tagFromManagedBinPath,
   latestTagForInstalled,
@@ -979,20 +980,46 @@ export function registerApi(app: Hono, d: Deps): void {
 
   // Provision the LiteRT-LM engine: uv → venv → `uv pip install litert-lm` (a small wheel that bundles its native
   // runtime — no torch/CUDA), then register as a kind='litert-lm' engine. 202 + progress via GET /status
-  // engineProvision. ?update=1 upgrades litert-lm to the latest release (passes -U to uv pip install).
-  app.post('/api/v1/engines/litert-lm', (c) => {
+  // engineProvision. ?update=1 upgrades litert-lm to the latest release (passes -U to uv pip install), but only
+  // after an honest upstream check: when the registered engine is already at the real PyPI latest, the route
+  // answers `alreadyLatest` WITHOUT provisioning — the old unconditional re-provision lit the global
+  // "Downloading…" banner for a no-op every time "Check for update" was clicked (the llama.cpp backends
+  // already behaved this way; see /engines/backends/:id/update above). Cancellable via the same channel.
+  app.post('/api/v1/engines/litert-lm', async (c) => {
     { const busy = engineWorkBusy(d); if (busy) return err(c, 409, 'engine_already_running', busy) }
     const root = join(d.store.dir(), 'engines')
     const upgrade = c.req.query('update') === '1'
+    // Only a POSITIVE "already latest" short-circuits; any check failure (offline, engine not
+    // registered) falls through to the old re-provision path, which surfaces its own error.
+    // Prefers the daemon's UpdateChecker — it shares the injectable fetcher the /engines/updates
+    // route uses, keeps the honest-cache semantics (a cached real answer survives an offline
+    // re-check), and lets tests stub the upstream.
+    if (upgrade) {
+      const registered = d.registry.list().engines.find((e) => e.kind === 'litert-lm')
+      const status = registered
+        ? await (d.updates
+            ? d.updates.check(registered, AbortSignal.timeout(15_000))
+            : computeUpdateStatus(registered, undefined, AbortSignal.timeout(15_000))
+          ).catch(() => null)
+        : null
+      if (status && status.latest !== null && !status.hasUpdate) {
+        return c.json({ accepted: false, alreadyLatest: true, version: status.latest, engine: 'litert-lm' })
+      }
+    }
+    const ac = new AbortController()
+    provisionAbort = ac
     void (async () => {
       try {
         d.provision.start('litert-lm', 'runtime_env')
-        const rt = await ensureLitertLmEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), upgrade)
+        const rt = await ensureLitertLmEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), upgrade, ac.signal)
         const eng = d.registry.addLitertLm(`LiteRT-LM (${rt.version})`, rt.python, rt.version)
         d.registry.activate(eng.id)
         d.provision.done()
       } catch (e) {
-        d.provision.fail(`Could not install LiteRT-LM: ${e instanceof Error ? e.message : e}`)
+        if ((e as Error)?.name === 'AbortError') d.provision.done() // user cancelled — nothing failed
+        else d.provision.fail(`Could not install LiteRT-LM: ${e instanceof Error ? e.message : e}`)
+      } finally {
+        if (provisionAbort === ac) provisionAbort = null
       }
     })()
     return c.json({ accepted: true, engine: 'litert-lm' }, 202)

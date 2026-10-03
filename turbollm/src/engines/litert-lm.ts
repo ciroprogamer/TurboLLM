@@ -50,23 +50,30 @@ function venvPython(envDir: string): string {
 /**
  * Provision an isolated LiteRT-LM runtime: uv → venv (pinned python) → `uv pip install litert-lm`. The wheel bundles
  * the native runtime, so unlike vLLM/SGLang this is small (tens of MB, no torch/CUDA). Returns the venv python +
- * version. When `upgrade` is true, passes `-U`.
+ * version. When `upgrade` is true, passes `-U`. `signal` aborts a provision in flight (the web UI's Cancel): every
+ * child process here takes it in its exec options, so an abort kills uv/pip and rejects with AbortError — the route
+ * maps that to a clean "user cancelled" state instead of a failure banner.
  */
-export async function ensureLitertLmEnv(root: string, onProgress?: (p: ProvisionProgress) => void, upgrade = false): Promise<LitertLmRuntime> {
-  if (process.platform === 'android') return ensureLitertLmAndroidEnv(root, onProgress, upgrade)
+export async function ensureLitertLmEnv(
+  root: string,
+  onProgress?: (p: ProvisionProgress) => void,
+  upgrade = false,
+  signal?: AbortSignal,
+): Promise<LitertLmRuntime> {
+  if (process.platform === 'android') return ensureLitertLmAndroidEnv(root, onProgress, upgrade, signal)
   const uv = await ensureUv(root, onProgress)
   const envDir = join(root, 'litert-lm', 'venv')
   const py = venvPython(envDir)
 
   if (!existsSync(py)) {
     onProgress?.({ phase: 'extracting', pct: -1 })
-    await execFileP(uv, ['venv', '--python', LITERT_LM_PYTHON, envDir], { cwd: root })
+    await execFileP(uv, ['venv', '--python', LITERT_LM_PYTHON, envDir], { cwd: root, signal })
   }
   onProgress?.({ phase: 'extracting', pct: -1 })
   const installArgs = ['pip', 'install', '--python', py, ...(upgrade ? ['-U'] : []), 'litert-lm']
-  await execFileP(uv, installArgs, { cwd: root, maxBuffer: 64 * 1024 * 1024 })
+  await execFileP(uv, installArgs, { cwd: root, maxBuffer: 64 * 1024 * 1024, signal })
 
-  const version = await probeLitertLm(py)
+  const version = await probeLitertLm(py, signal)
   return { python: py, version }
 }
 
@@ -120,14 +127,14 @@ async function pypiJson(url: string): Promise<{ info: { version: string }; urls:
   return (await r.json()) as { info: { version: string }; urls: PypiFile[] }
 }
 
-async function installAndroidNativeWheel(py: string, root: string, version: string): Promise<void> {
+async function installAndroidNativeWheel(py: string, root: string, version: string, signal?: AbortSignal): Promise<void> {
   const abi = androidWheelAbi(process.arch)
   if (!abi) throw new Error(`LiteRT-LM has no Android build for the ${process.arch} architecture.`)
   const release = await pypiJson(`${PYPI}/litert-lm-api/${version}/json`)
   const wheel = pickAndroidWheel(release.urls, abi)
   if (!wheel) throw new Error(`litert-lm-api ${version} publishes no Android ${abi} wheel.`)
 
-  const r = await fetch(wheel.url, { signal: AbortSignal.timeout(600_000) })
+  const r = await fetch(wheel.url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000) })
   if (!r.ok) throw new Error(`Could not download ${wheel.filename} (HTTP ${r.status}).`)
   const bytes = Buffer.from(await r.arrayBuffer())
   const want = wheel.digests?.sha256
@@ -135,7 +142,7 @@ async function installAndroidNativeWheel(py: string, root: string, version: stri
     throw new Error(`${wheel.filename} failed its SHA-256 check — the download is corrupt, try again.`)
   }
 
-  const { stdout } = await execFileP(py, ['-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])'], { timeout: 30_000 })
+  const { stdout } = await execFileP(py, ['-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])'], { timeout: 30_000, signal })
   const site = stdout.trim()
   // A wheel is a zip. Drop any earlier litert_lm_api metadata first so an upgrade leaves one dist-info behind.
   for (const e of readdirSync(site)) if (/^litert_lm_api-.*\.dist-info$/.test(e)) rmSync(join(site, e), { recursive: true, force: true })
@@ -143,7 +150,7 @@ async function installAndroidNativeWheel(py: string, root: string, version: stri
   mkdirSync(dirname(tmp), { recursive: true })
   writeFileSync(tmp, bytes)
   try {
-    await execFileP(py, ['-m', 'zipfile', '-e', tmp, site], { timeout: 120_000 })
+    await execFileP(py, ['-m', 'zipfile', '-e', tmp, site], { timeout: 120_000, signal })
   } finally {
     rmSync(tmp, { force: true })
   }
@@ -151,37 +158,43 @@ async function installAndroidNativeWheel(py: string, root: string, version: stri
 
 /**
  * Android/Termux twin of ensureLitertLmEnv (see the header comment for why it differs): device Python → venv → pip
- * installs the pure-Python packages → the native wheel is unpacked from PyPI by hand.
+ * installs the pure-Python packages → the native wheel is unpacked from PyPI by hand. `signal` cancels it (the web
+ * UI's Cancel) — same contract as the desktop path.
  */
-export async function ensureLitertLmAndroidEnv(root: string, onProgress?: (p: ProvisionProgress) => void, upgrade = false): Promise<LitertLmRuntime> {
+export async function ensureLitertLmAndroidEnv(
+  root: string,
+  onProgress?: (p: ProvisionProgress) => void,
+  upgrade = false,
+  signal?: AbortSignal,
+): Promise<LitertLmRuntime> {
   const systemPython = await findAndroidPython()
   const envDir = join(root, 'litert-lm', 'venv')
   const py = venvPython(envDir)
   if (!existsSync(py)) {
     onProgress?.({ phase: 'extracting', pct: -1 })
-    await execFileP(systemPython, ['-m', 'venv', envDir], { cwd: root })
+    await execFileP(systemPython, ['-m', 'venv', envDir], { cwd: root, signal })
   }
   onProgress?.({ phase: 'extracting', pct: -1 })
   const pip = (...args: string[]) =>
-    execFileP(py, ['-m', 'pip', 'install', '--disable-pip-version-check', ...(upgrade ? ['-U'] : []), ...args], { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 900_000 })
+    execFileP(py, ['-m', 'pip', 'install', '--disable-pip-version-check', ...(upgrade ? ['-U'] : []), ...args], { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 900_000, signal })
   // --no-deps: litert-lm pins litert-lm-api==<same version>, and pip would reject its Android-tagged wheel.
   await pip('--no-deps', 'litert-lm')
-  const version = (await probeLitertLm(py)).replace(/^litert-lm /, '')
+  const version = (await probeLitertLm(py, signal)).replace(/^litert-lm /, '')
   await pip(`litert-lm-builder==${version}`, 'click', 'prompt_toolkit', 'typing-extensions', 'questionary')
   onProgress?.({ phase: 'downloading', pct: -1 })
-  await installAndroidNativeWheel(py, root, version)
+  await installAndroidNativeWheel(py, root, version, signal)
 
-  const blocker = await litertLmServeBlocker(py)
+  const blocker = await litertLmServeBlocker(py, signal)
   if (blocker) throw new Error(blocker)
   return { python: py, version: `litert-lm ${version}` }
 }
 
 /** Read the installed litert-lm version (also a smoke test that the package imports). */
-export async function probeLitertLm(python: string): Promise<string> {
+export async function probeLitertLm(python: string, signal?: AbortSignal): Promise<string> {
   const { stdout } = await execFileP(
     python,
     ['-c', 'import importlib.metadata as m; print(m.version("litert-lm"))'],
-    { timeout: 30_000 },
+    { timeout: 30_000, signal },
   )
   return `litert-lm ${stdout.trim()}`
 }
@@ -223,11 +236,12 @@ const NATIVE_LOAD_PROBE = [
 ].join('\n')
 
 /** Preflight: can the LiteRT-LM runtime actually load here? Returns a clear message when blocked, or null when OK. */
-export async function litertLmServeBlocker(python: string): Promise<string | null> {
+export async function litertLmServeBlocker(python: string, signal?: AbortSignal): Promise<string | null> {
   try {
-    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: 60_000 })
+    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: 60_000, signal })
     return null
   } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e
     return classifyLitertLmBlocker(process.platform, process.arch, (e as { stderr?: string })?.stderr || e)
   }
 }

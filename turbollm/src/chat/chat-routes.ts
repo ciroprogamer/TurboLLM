@@ -27,6 +27,7 @@ import { buildBenchResultConfig } from '../telemetry/events/perf'
 import { shouldEmitBenchResult, benchRateLimitKey, MIN_GEN_TOKENS_FOR_BENCH } from '../telemetry/runtime/bench-rate-limit'
 import { resolveProfile, type LoadProfile } from '../models/profile'
 import type { ModelInfo } from '../engines/manager'
+import { applyEngineTokenLimit } from '../engines/compat'
 import { getModelProfile } from '../config/config'
 import { getSysInfo } from '../sysinfo/sysinfo'
 import { noteLocalActivity } from '../link/host-idle'
@@ -1061,6 +1062,7 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
       if (cappedMax != null) reqBody.max_tokens = cappedMax
       else delete reqBody.max_tokens
+      applyEngineTokenLimit(engineKind, reqBody)
       // GitHub #52: thinkingBudget (this turn) and preserveThinking (past turns) are
       // independent and can both be relevant at once, so merge rather than overwrite.
       // thinking_budget_tokens (not the unrecognized `reasoning_budget`) is the field the
@@ -1422,6 +1424,7 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
       if (cappedMax != null) reqBody.max_tokens = cappedMax
       else delete reqBody.max_tokens
+      applyEngineTokenLimit(engineKind, reqBody)
       // GitHub #52: thinkingBudget (this turn) and preserveThinking (past turns) are
       // independent and can both be relevant at once, so merge rather than overwrite.
       // thinking_budget_tokens (not the unrecognized `reasoning_budget`) is the field the

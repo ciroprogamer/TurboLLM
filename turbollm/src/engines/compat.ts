@@ -186,6 +186,19 @@ export function engineModelAlias(engineKind: string, modelPath?: string | null):
   return engineKind === 'mlx' || engineKind === 'vllm' || engineKind === 'sglang' ? ENGINE_MODEL_ALIAS : null
 }
 
+/**
+ * LiteRT-LM's server only honors `max_completion_tokens`; a plain `max_tokens` is silently ignored, so a capped request
+ * would run to the context limit. Moves the cap to the key that engine reads (an explicit `max_completion_tokens` wins).
+ * No-op for every other engine. Mutates and returns `body`.
+ */
+export function applyEngineTokenLimit<T extends Record<string, unknown>>(engineKind: string, body: T): T {
+  if (engineKind !== 'litert-lm' || !('max_tokens' in body)) return body
+  const b = body as Record<string, unknown>
+  if (b.max_completion_tokens == null && b.max_tokens != null) b.max_completion_tokens = b.max_tokens
+  delete b.max_tokens
+  return body
+}
+
 // ─── Hardware ↔ variant matching (engine overhaul, Phase 1) ──────────────────
 // PURE matcher: given a HardwareProfile and a variant's HardwareReq, decide
 // whether this box can run the variant, with a human-readable reason when not.

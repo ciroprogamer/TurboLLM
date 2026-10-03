@@ -65,3 +65,19 @@ test('a .litertlm load never carries llama.cpp flags or a tensor-parallel size',
   assert.ok(!opts.extraArgs.some((a) => a === '-ngl' || a === '--ctx-size' || a === '-c'))
   assert.equal(opts.tensorParallelSize, undefined)
 })
+
+test('an explicit backend in the profile wins over detection: gpu is honoured with no GPU detected (Android)', () => {
+  const forced = buildStartOpts({ entry: entry(), engine: engine(), cfg: defaultConfig(), sys: CPU_ONLY, overrides: { ngl: 0, litertLm: { backend: 'gpu' } }, trigger: 'manual' })
+  assert.equal(forced.litertLmConfig?.default.backend, 'gpu')
+  const cpu = buildStartOpts({ entry: entry(), engine: engine(), cfg: defaultConfig(), sys: WITH_GPU, overrides: { ngl: 99, litertLm: { backend: 'cpu' } }, trigger: 'manual' })
+  assert.equal(cpu.litertLmConfig?.default.backend, 'cpu')
+})
+
+test('a saved litertLm.backend survives the profile merge, and an old profile without it defaults to auto', () => {
+  const e = entry()
+  const saved = buildStartOpts({ entry: e, engine: engine(), cfg: withSaved({ ngl: 0, litertLm: { backend: 'gpu' } }, e), sys: CPU_ONLY, trigger: 'resume' })
+  assert.equal(saved.profile?.litertLm.backend, 'gpu')
+  assert.equal(saved.litertLmConfig?.default.backend, 'gpu')
+  const old = buildStartOpts({ entry: e, engine: engine(), cfg: withSaved({ ngl: 99 }, e), sys: CPU_ONLY, trigger: 'resume' })
+  assert.equal(old.profile?.litertLm.backend, 'auto')
+})

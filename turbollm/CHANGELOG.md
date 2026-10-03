@@ -50,6 +50,32 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   a clear message (its OS forbids running downloaded binaries). Corrupt, encrypted, or oversized archives
   fail cleanly and never leave a half-installed build behind.
 
+### Fixed
+
+- **LiteRT-LM context slider no longer stops at 32K.** A `.litertlm` bundle's real context window is baked
+  into the file (a FlatBuffer the scanner cannot read); the only size the filename can declare is the
+  `ekvNNNN` tag, and a bundle without one fell back to a hard 32,768-token slider ceiling — silently
+  refusing every larger export. The slider now allows up to 256K when the name declares no size (the
+  runtime still clamps `max_num_tokens` to the bundle's own limit, so the honest cap is unchanged when a
+  name does declare one).
+- **"Check for update" no longer lights the "Downloading…" banner for a no-op.** Every pip engine's update
+  button POSTed the upgrade endpoint unconditionally, so checking an already-latest LiteRT-LM (or vLLM /
+  SGLang / MLX) re-ran `uv pip install -U` and flashed the global download banner — with a toast claiming
+  an update was in progress that wasn't. The card's menu item now does a live status re-check
+  (`/engines/updates?refresh=1`) and reports the honest answer ("up to date (x.y.z)" or "a → b available");
+  only a known update triggers the real upgrade. The LiteRT-LM endpoint additionally mirrors the llama.cpp
+  backends' contract — an `?update=1` that finds the installed release already latest answers
+  `{ accepted: false, alreadyLatest: true, version }` without provisioning at all.
+- **The engine banner's Cancel button actually cancels a LiteRT-LM install.** The pip install path had no
+  abort signal wired, so Cancel returned `{ok: false}` and the install ran on — leaving what read as a
+  stuck, unresponsive button. The LiteRT-LM provision now threads an AbortSignal through every step (venv
+  creation, `uv pip install`, the Android wheel fetch + unpack), and an abort lands as a clean
+  "user cancelled" state, not a failure banner. The banner also names the engine correctly
+  ("LiteRT-LM engine", "SGLang engine" — previously the raw id).
+- **Applying a load preset no longer wipes the LiteRT-LM backend choice.** Preset merge deep-merged
+  `sampling`/`gpu`/`vllm` but replaced `litertLm` wholesale, so a preset saved before the field existed
+  reset a forced CPU/GPU backend to the default.
+
 ## [1.14.3] - 2026-09-30
 
 ### Added

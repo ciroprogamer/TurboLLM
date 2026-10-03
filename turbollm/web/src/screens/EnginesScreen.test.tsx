@@ -73,11 +73,11 @@ vi.mock('../lib/queries', async (importOriginal) => {
     useBackendInstall: () => {
       const noop = { mutate: vi.fn(), isPending: false }
       return {
-        backend: noop, mlx: noop, rapidMlx: noop, mlxVlm: noop, vllm: noop, sglang: noop,
+        backend: noop, mlx: noop, rapidMlx: noop, mlxVlm: noop, vllm: noop, sglang: noop, litertLm: noop,
         turboquant: noop, koboldcpp: noop, llamafile: noop,
         laya: { mutate: installLayaMutate, isPending: false },
         cancel: noop, remove: noop, enableBackend: noop,
-        updateVllm: noop, updateSglang: noop, updateMlx: noop, updateRapidMlx: noop, updateMlxVlm: noop,
+        updateVllm: noop, updateSglang: noop, updateLitertLm: noop, updateMlx: noop, updateRapidMlx: noop, updateMlxVlm: noop,
         updateLaya: noop, updateTurboquant: noop, updateKoboldcpp: noop, updateLlamafile: noop, updateBackend: noop,
       }
     },

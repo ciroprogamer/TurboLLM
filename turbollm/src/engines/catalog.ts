@@ -436,14 +436,14 @@ const ALL: CatalogEngine[] = [
     name: 'LiteRT-LM',
     kind: 'litert-lm',
     description:
-      "Google's on-device LLM runtime. Runs single-file .litertlm bundles (Gemma, Qwen3, Phi-4-mini, …) on the CPU or on any GPU through WebGPU, behind an OpenAI-compatible server.",
+      "Google's on-device LLM runtime. Runs single-file .litertlm bundles (Gemma, Qwen3, Phi-4-mini, …) on the CPU or the GPU, behind an OpenAI-compatible server.",
     provision: 'pip',
     homepage: 'https://github.com/google-ai-edge/LiteRT-LM',
     repo: 'google-ai-edge/LiteRT-LM',
-    platforms: ['win32', 'linux', 'darwin'],
+    platforms: ['win32', 'linux', 'darwin', 'android'],
     support: 'experimental',
     installEndpoint: '/api/v1/engines/litert-lm',
-    note: 'Runs .litertlm models only (not GGUF). CPU, or GPU via WebGPU. Wheels exist only for Windows x64, Linux x64/arm64 and macOS Apple Silicon. A small install — no torch or CUDA.',
+    note: 'Runs .litertlm models only (not GGUF). CPU or GPU. Native builds exist only for Windows x64, Linux x64/arm64, macOS Apple Silicon and Android. A small install — no torch or CUDA. On Android it needs TurboLLM running inside Termux with `pkg install python`; the standalone Android app has no Python.',
     defaultBranch: 'main',
     variants: [
       {
@@ -460,6 +460,15 @@ const ALL: CatalogEngine[] = [
         label: 'Linux (x64 / arm64)',
         repo: 'google-ai-edge/LiteRT-LM',
         requires: { platform: ['linux'], arch: ['x64', 'arm64'] },
+        stability: 'experimental',
+        speed: 'fast',
+        hasPrebuilt: true,
+      },
+      {
+        id: 'litert-lm-android',
+        label: 'Android (Termux, arm64 / x86_64)',
+        repo: 'google-ai-edge/LiteRT-LM',
+        requires: { platform: ['android'], arch: ['arm64', 'x64'] },
         stability: 'experimental',
         speed: 'fast',
         hasPrebuilt: true,

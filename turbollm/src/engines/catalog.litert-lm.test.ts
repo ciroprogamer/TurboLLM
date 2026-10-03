@@ -16,7 +16,7 @@ test('the catalog lists LiteRT-LM as an experimental pip engine installed throug
 test('every LiteRT-LM variant is experimental, so none can become the headline recommendation', () => {
   const e = catalogEngine('litert-lm')!
   const variants = e.variants ?? []
-  assert.equal(variants.length, 3)
+  assert.equal(variants.length, 4)
   for (const v of variants) {
     assert.equal(v.stability, 'experimental', v.id)
     assert.equal(v.hasPrebuilt, true, v.id)
@@ -24,11 +24,11 @@ test('every LiteRT-LM variant is experimental, so none can become the headline r
   }
 })
 
-test('LiteRT-LM is listed on desktop platforms and not on Android', () => {
-  for (const platform of ['win32', 'darwin', 'linux'] as const) {
+test('LiteRT-LM is listed on desktop platforms and on Android', () => {
+  for (const platform of ['win32', 'darwin', 'linux', 'android'] as const) {
     assert.equal(catalogForPlatform(platform).find((e) => e.id === 'litert-lm')?.supportedHere, true, platform)
   }
-  assert.equal(catalogForPlatform('android').some((e) => e.id === 'litert-lm'), false)
+  assert.equal(catalogForPlatform('android').some((e) => e.id === 'litert-lm'), true)
 })
 
 test('variants match exactly the platform/arch pairs that have a wheel', () => {
@@ -40,6 +40,10 @@ test('variants match exactly the platform/arch pairs that have a wheel', () => {
   assert.equal(fits('linux', 'x64'), true)
   assert.equal(fits('linux', 'arm64'), true)
   assert.equal(fits('darwin', 'arm64'), true)
+  assert.equal(fits('android', 'arm64'), true)
+  assert.equal(fits('android', 'x64'), true)
+  assert.equal(fits('android', 'arm'), false)
+  assert.equal(fits('linux', 'arm'), false)
   assert.equal(fits('darwin', 'x64'), false)
   assert.equal(fits('win32', 'arm64'), false)
 })

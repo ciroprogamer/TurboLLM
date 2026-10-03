@@ -27,9 +27,10 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 - **LiteRT-LM engine (experimental).** Google's on-device LLM runtime is now an engine kind: install it from
   Engines (a small pip environment, no PyTorch or CUDA) and load single-file `.litertlm` bundles (Gemma, Qwen3,
-  Phi-4-mini, …) that the library now discovers. GPU layers switch between the CPU and GPU (WebGPU) backend;
-  context and threads come from the load profile. Wheels exist only for Windows x64, Linux x64/arm64 and macOS
-  Apple Silicon. LiteRT-LM loads a model lazily on its first request, so TurboLLM warms it up with a one-token
+  Phi-4-mini, …) that the library now discovers. GPU layers switch between the CPU and GPU backend;
+  context and threads come from the load profile. Native builds exist for Windows x64, Linux x64/arm64, macOS
+  Apple Silicon and Android (arm64 / x86_64). On Android the engine runs only when TurboLLM is started from
+  Termux with `pkg install python`; the standalone Android app has no Python. LiteRT-LM loads a model lazily on its first request, so TurboLLM warms it up with a one-token
   request and reports a bad bundle as a load error instead of a hung start.
 - **Add your own engine by uploading its .zip.** In the Add-engine flow, "Upload a .zip…" now sits beside
   "Choose folder…": pick a fork's release archive and TurboLLM searches it at any depth for `llama-server`,

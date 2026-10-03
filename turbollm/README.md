@@ -563,7 +563,7 @@ you choose, LM Studio-style).
 
 **Engine types.** **llama.cpp / GGUF**, **KoboldCpp** and **llamafile** (GGUF, every OS),
 **MLX** and **MLX-VLM** (macOS), **vLLM** (Linux + NVIDIA), and **LiteRT-LM** (Google's on-device
-runtime for `.litertlm` models, CPU or WebGPU; experimental) are all first-class engine kinds —
+runtime for `.litertlm` models, CPU or GPU, incl. Android via Termux; experimental) are all first-class engine kinds —
 install from the curated catalog, pick the right one per model, and switch from a single dropdown.
 
 **Fully supervised.** Every engine runs under a real state machine: health-gated readiness,

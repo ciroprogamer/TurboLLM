@@ -220,11 +220,11 @@ const ENGINE_META: Record<string, EngineMeta> = {
     format: '.litertlm',
     pros: [
       'Small install — no PyTorch or CUDA',
-      'CPU, or any GPU through WebGPU',
+      'CPU or GPU, on phones and desktops',
       'Runs Gemma, Qwen3 and Phi-4-mini bundles',
       'OpenAI-compatible server out of the box',
     ],
-    cons: ['.litertlm models only (not GGUF)', 'Windows x64, Linux x64/arm64, macOS Apple Silicon only', 'Experimental'],
+    cons: ['.litertlm models only (not GGUF)', 'Android needs Termux + Python (not the standalone app)', 'Experimental'],
   },
   mlx: {
     icon: Cpu,

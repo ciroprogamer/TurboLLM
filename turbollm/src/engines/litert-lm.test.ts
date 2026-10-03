@@ -12,6 +12,7 @@ import {
   litertLmLoadFailureMessage,
   litertLmModelRef,
   litertLmPathBlocker,
+  litertLmPrefillStats,
   litertLmProfileToConfig,
   litertLmServeBlocker,
   litertLmServerCommand,
@@ -197,4 +198,24 @@ test('litertLmServeBlocker: reports a native library that will not load, which a
 
 test('litertLmServeBlocker: a future version without _get_lib degrades to the plain import, not a false failure', { skip: !HAS_PYTHON }, async (t) => {
   assert.equal(await blockerWithFfi(t, '# no _get_lib here\n'), null)
+})
+
+test('litertLmPrefillStats: prompt tokens over time-to-first-token, rounded to one decimal', () => {
+  assert.deepEqual(litertLmPrefillStats(300, 1500), { promptMs: 1500, promptTps: 200 })
+  assert.deepEqual(litertLmPrefillStats(100, 3000), { promptMs: 3000, promptTps: 33.3 })
+})
+
+test('litertLmPrefillStats: no usage or no TTFT yields nothing rather than a made-up number', () => {
+  assert.equal(litertLmPrefillStats(undefined, 1000), null)
+  assert.equal(litertLmPrefillStats(0, 1000), null)
+  assert.equal(litertLmPrefillStats(100, 0), null)
+  assert.equal(litertLmPrefillStats(100, Number.NaN), null)
+})
+
+test('litertLmProfileToConfig: an explicit backend overrides GPU detection and layers', () => {
+  const p = (backend: 'auto' | 'cpu' | 'gpu', ngl: number) => ({ ctx: 4096, ngl, threads: 0, litertLm: { backend } })
+  assert.equal(litertLmProfileToConfig(p('gpu', 0), false).default.backend, 'gpu', 'forced GPU with none detected (Android)')
+  assert.equal(litertLmProfileToConfig(p('cpu', 99), true).default.backend, 'cpu', 'forced CPU on a GPU machine')
+  assert.equal(litertLmProfileToConfig(p('auto', 99), true).default.backend, 'gpu')
+  assert.equal(litertLmProfileToConfig(p('auto', 99), false).default.backend, 'cpu')
 })

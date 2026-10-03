@@ -28,6 +28,7 @@ import { shouldEmitBenchResult, benchRateLimitKey, MIN_GEN_TOKENS_FOR_BENCH } fr
 import { resolveProfile, type LoadProfile } from '../models/profile'
 import type { ModelInfo } from '../engines/manager'
 import { applyEngineTokenLimit } from '../engines/compat'
+import { litertLmPrefillStats } from '../engines/litert-lm'
 import { getModelProfile } from '../config/config'
 import { getSysInfo } from '../sysinfo/sysinfo'
 import { noteLocalActivity } from '../link/host-idle'
@@ -1616,6 +1617,15 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
     stats.genMs        = totalMs - ttftMs
     stats.tps          = stats.genMs > 0 ? Math.round((stats.genTokens / stats.genMs) * 1000 * 10) / 10 : 0
     stats.cachedTokens = cachedExplicit ?? 0
+    // LiteRT-LM sends token counts but no timings, so derive prefill from TTFT. Only for a single-round turn: with tool
+    // calls, `ttftMs` spans earlier rounds too and would understate the speed.
+    if (engineKind === 'litert-lm' && allToolCalls.length === 0) {
+      const pf = litertLmPrefillStats(finalUsage.prompt_tokens, ttftMs)
+      if (pf) {
+        stats.promptMs = pf.promptMs
+        stats.promptTps = pf.promptTps
+      }
+    }
   }
 
   // F-022: run the heuristic referee on Research persona replies before persisting.

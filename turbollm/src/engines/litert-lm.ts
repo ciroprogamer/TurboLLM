@@ -255,20 +255,34 @@ export interface LitertLmConfig {
 }
 
 /**
- * Map a load profile to LiteRT-LM's config. Like KoboldCpp, the GPU-layers value is the CPU/GPU switch: LiteRT-LM has no
- * partial offload, so `ngl > 0` on a machine with a GPU means the GPU backend (WebGPU — Vulkan, Metal or D3D12, any
- * vendor) and everything else means CPU.
+ * Map a load profile to LiteRT-LM's config. LiteRT-LM has no partial offload, so the profile's `litertLm.backend` picks
+ * cpu or gpu outright; `auto` (the default) follows the KoboldCpp convention: `ngl > 0` on a machine with a GPU means
+ * the GPU backend and everything else means CPU.
  *   ctx     → max_num_tokens   (the KV-cache length; a bundle exported with a shorter one still caps it)
  *   threads → cpu_thread_count (only when set; 0 = let the runtime choose)
  */
 export function litertLmProfileToConfig(
-  p: { ctx: number; ngl: number; threads: number },
+  p: { ctx: number; ngl: number; threads: number; litertLm?: { backend?: 'auto' | 'cpu' | 'gpu' } },
   hasGpu: boolean,
 ): LitertLmConfig {
-  const config: LitertLmConfig = { default: { backend: hasGpu && p.ngl > 0 ? 'gpu' : 'cpu' } }
+  // An explicit choice wins over detection: Android/Termux cannot report a GPU, so `auto` would pin it to CPU.
+  const choice = p.litertLm?.backend ?? 'auto'
+  const backend: 'cpu' | 'gpu' = choice === 'auto' ? (hasGpu && p.ngl > 0 ? 'gpu' : 'cpu') : choice
+  const config: LitertLmConfig = { default: { backend } }
   if (Number.isInteger(p.ctx) && p.ctx > 0) config.default.max_num_tokens = p.ctx
   if (Number.isInteger(p.threads) && p.threads > 0) config.default.cpu_thread_count = p.threads
   return config
+}
+
+/**
+ * Prefill speed for a LiteRT-LM turn. Its OpenAI server reports only token counts (`usage`), never llama.cpp-style
+ * `timings`, even though the runtime measures prefill internally — so the speed is derived: prompt tokens over the time
+ * to the first streamed token. That time also contains the first decode step, so this slightly UNDER-states true
+ * prefill, which is the honest direction for an approximation. Null when either input is missing, so nothing is faked.
+ */
+export function litertLmPrefillStats(promptTokens: number | undefined, ttftMs: number): { promptMs: number; promptTps: number } | null {
+  if (!promptTokens || promptTokens <= 0 || !(ttftMs > 0)) return null
+  return { promptMs: ttftMs, promptTps: Math.round((promptTokens / ttftMs) * 1000 * 10) / 10 }
 }
 
 /** Where the config for the engine on `port` lives. Per port, not shared: two engines can run side by side and a

@@ -15,9 +15,17 @@
 //   - The `model` field is `<id>[,<backend>[,<max-tokens>]]`, so a path containing a comma cannot be sent
 //     (litertLmPathBlocker refuses it up front rather than letting it be misparsed).
 //
-// Platform reality: the native wheel (litert-lm-api) ships for Windows x64, Linux x64/arm64 and macOS arm64 only — there is
-// no macOS-Intel or Windows-ARM build, and the catalog gates on exactly that.
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+// Platform reality: the native wheel (litert-lm-api) ships for Windows x64, Linux x64/arm64, macOS arm64 and Android
+// (arm64-v8a, x86_64) — there is no macOS-Intel or Windows-ARM build, and the catalog gates on exactly that.
+//
+// Android is the odd one out. The Android wheel is `py3-none-android_23_<abi>`: a thin ctypes wrapper around one
+// liblitert-lm.so (bionic, linked only against system libs), so it works in any bionic Python such as Termux's — but
+// (a) `uv` publishes no Android build, so the venv comes from the device's own `python -m venv`, and (b) pip refuses a
+// wheel whose platform tag it does not recognise, which Termux's Python may not, so the native wheel is fetched from
+// PyPI and unpacked into the venv directly (ensureLitertLmAndroidEnv). The Android APK has no Python at all, so there
+// this engine is only reachable when TurboLLM itself runs inside Termux.
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -45,6 +53,7 @@ function venvPython(envDir: string): string {
  * version. When `upgrade` is true, passes `-U`.
  */
 export async function ensureLitertLmEnv(root: string, onProgress?: (p: ProvisionProgress) => void, upgrade = false): Promise<LitertLmRuntime> {
+  if (process.platform === 'android') return ensureLitertLmAndroidEnv(root, onProgress, upgrade)
   const uv = await ensureUv(root, onProgress)
   const envDir = join(root, 'litert-lm', 'venv')
   const py = venvPython(envDir)
@@ -61,6 +70,112 @@ export async function ensureLitertLmEnv(root: string, onProgress?: (p: Provision
   return { python: py, version }
 }
 
+// ── Android (Termux) provisioning ────────────────────────────────────────────
+
+const PYPI = 'https://pypi.org/pypi'
+
+/** The ABI part of the native wheel's platform tag for this CPU, or null when Android has no build for it. */
+export function androidWheelAbi(arch: string): 'arm64_v8a' | 'x86_64' | null {
+  if (arch === 'arm64') return 'arm64_v8a'
+  if (arch === 'x64') return 'x86_64'
+  return null
+}
+
+export interface PypiFile { filename: string; url: string; digests?: { sha256?: string } }
+
+/** Pick the Android native wheel for `abi` out of a PyPI release's file list (highest API level wins when several). */
+export function pickAndroidWheel(files: PypiFile[], abi: string): PypiFile | null {
+  const re = new RegExp(`-py3-none-android_(\\d+)_${abi}\\.whl$`)
+  const found = files
+    .map((f) => ({ f, api: Number(re.exec(f.filename)?.[1]) }))
+    .filter((x) => Number.isFinite(x.api))
+    .sort((a, b) => b.api - a.api)
+  return found[0]?.f ?? null
+}
+
+/** Termux hint shared by every "no usable Python" failure. */
+const ANDROID_PYTHON_HINT =
+  'LiteRT-LM on Android needs Python 3.10 or newer from Termux (run `pkg install python`) with TurboLLM started ' +
+  'from Termux. The standalone Android app has no Python and cannot run this engine.'
+
+/** A python>=3.10 with the venv module on this device, or throws with the Termux instructions. */
+async function findAndroidPython(): Promise<string> {
+  for (const cand of ['python3', 'python']) {
+    try {
+      const { stdout } = await execFileP(
+        cand,
+        ['-c', 'import sys, venv; print("%d.%d" % sys.version_info[:2])'],
+        { timeout: 30_000 },
+      )
+      const [maj, min] = stdout.trim().split('.').map(Number)
+      if (maj > 3 || (maj === 3 && min >= 10)) return cand
+    } catch { /* try the next name */ }
+  }
+  throw new Error(ANDROID_PYTHON_HINT)
+}
+
+async function pypiJson(url: string): Promise<{ info: { version: string }; urls: PypiFile[] }> {
+  const r = await fetch(url, { signal: AbortSignal.timeout(60_000) })
+  if (!r.ok) throw new Error(`PyPI answered ${r.status} for ${url}`)
+  return (await r.json()) as { info: { version: string }; urls: PypiFile[] }
+}
+
+async function installAndroidNativeWheel(py: string, root: string, version: string): Promise<void> {
+  const abi = androidWheelAbi(process.arch)
+  if (!abi) throw new Error(`LiteRT-LM has no Android build for the ${process.arch} architecture.`)
+  const release = await pypiJson(`${PYPI}/litert-lm-api/${version}/json`)
+  const wheel = pickAndroidWheel(release.urls, abi)
+  if (!wheel) throw new Error(`litert-lm-api ${version} publishes no Android ${abi} wheel.`)
+
+  const r = await fetch(wheel.url, { signal: AbortSignal.timeout(600_000) })
+  if (!r.ok) throw new Error(`Could not download ${wheel.filename} (HTTP ${r.status}).`)
+  const bytes = Buffer.from(await r.arrayBuffer())
+  const want = wheel.digests?.sha256
+  if (want && createHash('sha256').update(bytes).digest('hex') !== want) {
+    throw new Error(`${wheel.filename} failed its SHA-256 check — the download is corrupt, try again.`)
+  }
+
+  const { stdout } = await execFileP(py, ['-c', 'import sysconfig; print(sysconfig.get_paths()["purelib"])'], { timeout: 30_000 })
+  const site = stdout.trim()
+  // A wheel is a zip. Drop any earlier litert_lm_api metadata first so an upgrade leaves one dist-info behind.
+  for (const e of readdirSync(site)) if (/^litert_lm_api-.*\.dist-info$/.test(e)) rmSync(join(site, e), { recursive: true, force: true })
+  const tmp = join(root, 'litert-lm', wheel.filename)
+  mkdirSync(dirname(tmp), { recursive: true })
+  writeFileSync(tmp, bytes)
+  try {
+    await execFileP(py, ['-m', 'zipfile', '-e', tmp, site], { timeout: 120_000 })
+  } finally {
+    rmSync(tmp, { force: true })
+  }
+}
+
+/**
+ * Android/Termux twin of ensureLitertLmEnv (see the header comment for why it differs): device Python → venv → pip
+ * installs the pure-Python packages → the native wheel is unpacked from PyPI by hand.
+ */
+export async function ensureLitertLmAndroidEnv(root: string, onProgress?: (p: ProvisionProgress) => void, upgrade = false): Promise<LitertLmRuntime> {
+  const systemPython = await findAndroidPython()
+  const envDir = join(root, 'litert-lm', 'venv')
+  const py = venvPython(envDir)
+  if (!existsSync(py)) {
+    onProgress?.({ phase: 'extracting', pct: -1 })
+    await execFileP(systemPython, ['-m', 'venv', envDir], { cwd: root })
+  }
+  onProgress?.({ phase: 'extracting', pct: -1 })
+  const pip = (...args: string[]) =>
+    execFileP(py, ['-m', 'pip', 'install', '--disable-pip-version-check', ...(upgrade ? ['-U'] : []), ...args], { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 900_000 })
+  // --no-deps: litert-lm pins litert-lm-api==<same version>, and pip would reject its Android-tagged wheel.
+  await pip('--no-deps', 'litert-lm')
+  const version = (await probeLitertLm(py)).replace(/^litert-lm /, '')
+  await pip(`litert-lm-builder==${version}`, 'click', 'prompt_toolkit', 'typing-extensions', 'questionary')
+  onProgress?.({ phase: 'downloading', pct: -1 })
+  await installAndroidNativeWheel(py, root, version)
+
+  const blocker = await litertLmServeBlocker(py)
+  if (blocker) throw new Error(blocker)
+  return { python: py, version: `litert-lm ${version}` }
+}
+
 /** Read the installed litert-lm version (also a smoke test that the package imports). */
 export async function probeLitertLm(python: string): Promise<string> {
   const { stdout } = await execFileP(
@@ -72,9 +187,9 @@ export async function probeLitertLm(python: string): Promise<string> {
 }
 
 /**
- * Turn a failed `import litert_lm` probe into an actionable message. The package installs anywhere pip does (the CLI is
- * pure Python), but its native library only loads where a wheel exists, so an unsupported OS/arch — or a Linux whose C
- * library predates the manylinux_2_27 wheel — fails at import with a loader error that means nothing to a user.
+ * Turn a failed native-load probe into an actionable message. The package installs anywhere pip does (the CLI is pure
+ * Python), but its native library only loads where a wheel exists, so an unsupported OS/arch — or a Linux whose C
+ * library predates the manylinux_2_27 wheel — fails with a loader error that means nothing to a user.
  */
 export function classifyLitertLmBlocker(platform: NodeJS.Platform, arch: string, error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error)
@@ -82,19 +197,35 @@ export function classifyLitertLmBlocker(platform: NodeJS.Platform, arch: string,
   const supported =
     (platform === 'win32' && arch === 'x64') ||
     (platform === 'linux' && (arch === 'x64' || arch === 'arm64')) ||
-    (platform === 'darwin' && arch === 'arm64')
+    (platform === 'darwin' && arch === 'arm64') ||
+    (platform === 'android' && androidWheelAbi(arch) !== null)
   if (!supported) {
-    return 'LiteRT-LM publishes its runtime only for Windows x64, Linux x64/arm64 and macOS on Apple Silicon — ' +
-      'there is no build for this operating system / architecture.'
+    return 'LiteRT-LM publishes its runtime only for Windows x64, Linux x64/arm64, macOS on Apple Silicon and Android ' +
+      '(arm64 / x86_64) — there is no build for this operating system / architecture.'
   }
-  return `LiteRT-LM's native runtime could not load on this machine (${detail}). ` +
-    'On Linux it needs glibc 2.27 or newer; reinstalling the engine from Engines may also fix a half-installed environment.'
+  const need = platform === 'android'
+    ? 'On Android it needs Android 6.0 (API 23) or newer and the Python from Termux; reinstalling the engine from Engines may also fix a half-installed environment.'
+    : 'On Linux it needs glibc 2.27 or newer; reinstalling the engine from Engines may also fix a half-installed environment.'
+  return `LiteRT-LM's native runtime could not load on this machine (${detail}). ${need}`
 }
+
+/**
+ * Python that proves the native runtime loads, not just the package. `import litert_lm` alone proves nothing: the
+ * wrapper dlopens liblitert-lm.so lazily on first use (`_ffi._get_lib`, verified on litert-lm-api 0.17.1), so a wrong-arch
+ * or unloadable library would otherwise only surface mid-request. `_get_lib` is private, so if a future version renames
+ * it the probe degrades to the plain import instead of reporting a false failure.
+ */
+const NATIVE_LOAD_PROBE = [
+  'import importlib, litert_lm',
+  "ffi = importlib.import_module('litert_lm._ffi')",
+  "load = getattr(ffi, '_get_lib', None)",
+  'load() if callable(load) else None',
+].join('\n')
 
 /** Preflight: can the LiteRT-LM runtime actually load here? Returns a clear message when blocked, or null when OK. */
 export async function litertLmServeBlocker(python: string): Promise<string | null> {
   try {
-    await execFileP(python, ['-c', 'import litert_lm'], { timeout: 60_000 })
+    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: 60_000 })
     return null
   } catch (e) {
     return classifyLitertLmBlocker(process.platform, process.arch, (e as { stderr?: string })?.stderr || e)

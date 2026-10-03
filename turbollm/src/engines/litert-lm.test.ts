@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import {
+  androidWheelAbi,
   classifyLitertLmBlocker,
   litertLmConfigPath,
   litertLmLoadFailureMessage,
   litertLmModelRef,
   litertLmPathBlocker,
   litertLmProfileToConfig,
+  litertLmServeBlocker,
   litertLmServerCommand,
+  pickAndroidWheel,
   warmUpLitertLm,
   writeLitertLmConfig,
 } from './litert-lm'
@@ -69,17 +73,17 @@ test('the config file is per port and round-trips what was written', (t: TestCon
 })
 
 test('classifyLitertLmBlocker: an unsupported platform/arch is named as having no build', () => {
-  for (const [platform, arch] of [['darwin', 'x64'], ['win32', 'arm64'], ['freebsd', 'x64']] as const) {
-    assert.match(classifyLitertLmBlocker(platform, arch, new Error('x')), /only for Windows x64, Linux x64\/arm64 and macOS on Apple Silicon/)
+  for (const [platform, arch] of [['darwin', 'x64'], ['win32', 'arm64'], ['freebsd', 'x64'], ['android', 'arm'], ['android', 'ia32']] as const) {
+    assert.match(classifyLitertLmBlocker(platform, arch, new Error('x')), /only for Windows x64, Linux x64\/arm64, macOS on Apple Silicon and Android/)
   }
 })
 
 test('classifyLitertLmBlocker: a supported platform reports a load failure with the last stderr line, capped', () => {
-  for (const [platform, arch] of [['win32', 'x64'], ['linux', 'x64'], ['linux', 'arm64'], ['darwin', 'arm64']] as const) {
+  for (const [platform, arch] of [['win32', 'x64'], ['linux', 'x64'], ['linux', 'arm64'], ['darwin', 'arm64'], ['android', 'arm64'], ['android', 'x64']] as const) {
     const msg = classifyLitertLmBlocker(platform, arch, new Error('Traceback\r\nImportError: libc too old'))
     assert.doesNotMatch(msg, /no build/)
     assert.match(msg, /ImportError: libc too old/)
-    assert.match(msg, /glibc 2\.27/)
+    assert.match(msg, platform === 'android' ? /API 23.*Termux/ : /glibc 2\.27/)
   }
   const long = classifyLitertLmBlocker('linux', 'x64', new Error('E: ' + 'x'.repeat(5000)))
   assert.ok(long.length < 600)
@@ -130,4 +134,67 @@ test('warmUpLitertLm: a 500 returns the runtime message carried in the status te
 test('warmUpLitertLm: nothing listening is reported as a failure, not thrown', async () => {
   const res = await warmUpLitertLm(1, '/m.litertlm', AbortSignal.timeout(2000))
   assert.equal(res.ok, false)
+})
+
+test('androidWheelAbi maps Node arch names to the wheel platform tag', () => {
+  assert.equal(androidWheelAbi('arm64'), 'arm64_v8a')
+  assert.equal(androidWheelAbi('x64'), 'x86_64')
+  assert.equal(androidWheelAbi('arm'), null)
+  assert.equal(androidWheelAbi('ia32'), null)
+})
+
+test('pickAndroidWheel selects the matching Android ABI and ignores desktop wheels', () => {
+  const f = (filename: string) => ({ filename, url: `https://files/${filename}` })
+  const files = [
+    f('litert_lm_api-0.17.1-py3-none-android_23_arm64_v8a.whl'),
+    f('litert_lm_api-0.17.1-py3-none-android_23_x86_64.whl'),
+    f('litert_lm_api-0.17.1-py3-none-manylinux_2_27_aarch64.whl'),
+    f('litert_lm_api-0.17.1-py3-none-win_amd64.whl'),
+  ]
+  assert.equal(pickAndroidWheel(files, 'arm64_v8a')?.filename, 'litert_lm_api-0.17.1-py3-none-android_23_arm64_v8a.whl')
+  assert.equal(pickAndroidWheel(files, 'x86_64')?.filename, 'litert_lm_api-0.17.1-py3-none-android_23_x86_64.whl')
+  assert.equal(pickAndroidWheel(files.slice(2), 'arm64_v8a'), null)
+})
+
+test('pickAndroidWheel prefers the highest API level when several are published', () => {
+  const f = (filename: string) => ({ filename, url: 'u' })
+  const picked = pickAndroidWheel(
+    [f('x-1-py3-none-android_21_arm64_v8a.whl'), f('x-1-py3-none-android_24_arm64_v8a.whl'), f('x-1-py3-none-android_9_arm64_v8a.whl')],
+    'arm64_v8a',
+  )
+  assert.equal(picked?.filename, 'x-1-py3-none-android_24_arm64_v8a.whl')
+})
+
+// ── the native-load preflight, against a stand-in `litert_lm` package on PYTHONPATH ──────────
+const HAS_PYTHON = (() => {
+  try { execFileSync('python3', ['--version'], { stdio: 'ignore' }); return true } catch { return false }
+})()
+
+async function blockerWithFfi(t: TestContext, ffiSource: string): Promise<string | null> {
+  const dir = tmpDir('turbollm-litert-probe-')
+  const before = process.env.PYTHONPATH
+  t.after(() => {
+    if (before === undefined) delete process.env.PYTHONPATH
+    else process.env.PYTHONPATH = before
+    rmSync(dir, { recursive: true, force: true })
+  })
+  mkdirSync(join(dir, 'litert_lm'))
+  writeFileSync(join(dir, 'litert_lm', '__init__.py'), '')
+  writeFileSync(join(dir, 'litert_lm', '_ffi.py'), ffiSource)
+  process.env.PYTHONPATH = dir
+  return litertLmServeBlocker('python3')
+}
+
+test('litertLmServeBlocker: passes when the native library loads', { skip: !HAS_PYTHON }, async (t) => {
+  assert.equal(await blockerWithFfi(t, 'def _get_lib():\n    return object()\n'), null)
+})
+
+test('litertLmServeBlocker: reports a native library that will not load, which a bare import would miss', { skip: !HAS_PYTHON }, async (t) => {
+  const msg = await blockerWithFfi(t, 'def _get_lib():\n    raise OSError("liblitert-lm.so: wrong ELF class")\n')
+  assert.match(msg ?? '', /native runtime could not load/)
+  assert.match(msg ?? '', /wrong ELF class/)
+})
+
+test('litertLmServeBlocker: a future version without _get_lib degrades to the plain import, not a false failure', { skip: !HAS_PYTHON }, async (t) => {
+  assert.equal(await blockerWithFfi(t, '# no _get_lib here\n'), null)
 })

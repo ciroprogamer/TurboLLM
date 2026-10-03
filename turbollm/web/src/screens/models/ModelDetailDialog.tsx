@@ -43,6 +43,9 @@ function mergePresetIntoDraft(draft: LoadProfile, profile: Partial<LoadProfile> 
     sampling: { ...draft.sampling, ...(over.sampling ?? {}) },
     gpu: { ...draft.gpu, ...(over.gpu ?? {}) },
     vllm: { ...draft.vllm, ...(over.vllm ?? {}) },
+    // Same deep-merge as vllm: a preset saved before this field existed (or created from a
+    // partial profile) must not wipe the LiteRT-LM backend choice back to undefined.
+    litertLm: { ...(draft.litertLm ?? defaultLitertLm()), ...(over.litertLm ?? {}) },
   }
 }
 
@@ -631,10 +634,18 @@ export function ModelDetailDialog({
                   </Row>
                   <Slider
                     label="Context length"
-                    hint={detail.nativeCtx > 0 ? `This bundle was exported for ${detail.nativeCtx.toLocaleString()} tokens; a longer value is capped by the bundle.` : 'Tokens of history (KV-cache length). A bundle exported with a shorter limit still caps it.'}
+                    hint={detail.nativeCtx > 0
+                      ? `This bundle was exported for ${detail.nativeCtx.toLocaleString()} tokens — the slider stops at its baked-in KV-cache size.`
+                      : "Tokens of history (KV-cache length). The filename declares no ekv size, so the slider is generous here — the bundle's own export size still caps it at runtime."}
                     value={draft.ctx}
                     min={512}
-                    max={Math.max(512, detail.nativeCtx || 32768)}
+                    // 256K when the bundle declares no `ekvNNNN` in its name: a .litertlm's real
+                    // window is baked into the bundle (a FlatBuffer the scanner cannot read), so an
+                    // absent tag means "unknown", NOT 32K — the old 32768 fallback silently refused
+                    // every larger bundle (a 64K/128K export with an untagged name). The runtime
+                    // clamps `max_num_tokens` to the bundle either way, so a generous ceiling can
+                    // only ever over-offer, never over-deliver.
+                    max={Math.max(512, detail.nativeCtx || 262144)}
                     step={512}
                     onChange={(v) => set('ctx', v)}
                     fmt={(v) => v.toLocaleString()}

@@ -606,7 +606,7 @@ export type ModelEntry = {
   name: string
   path: string
   dir: string
-  format: 'gguf' | 'mlx'
+  format: 'gguf' | 'mlx' | 'litertlm'
   sizeBytes: number
   sizeLabel: string
   arch: string

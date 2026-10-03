@@ -20,6 +20,7 @@ import {
   Minus,
   MoreHorizontal,
   Network,
+  Smartphone,
   Package,
   Pencil,
   RefreshCw,
@@ -212,6 +213,18 @@ const ENGINE_META: Record<string, EngineMeta> = {
       'OpenAI-compatible server out of the box',
     ],
     cons: ['Linux + NVIDIA only', 'Heavy install; needs recent CUDA', 'Overkill for a single desktop user'],
+  },
+  'litert-lm': {
+    icon: Smartphone,
+    tagline: "Google's on-device runtime",
+    format: '.litertlm',
+    pros: [
+      'Small install — no PyTorch or CUDA',
+      'CPU, or any GPU through WebGPU',
+      'Runs Gemma, Qwen3 and Phi-4-mini bundles',
+      'OpenAI-compatible server out of the box',
+    ],
+    cons: ['.litertlm models only (not GGUF)', 'Windows x64, Linux x64/arm64, macOS Apple Silicon only', 'Experimental'],
   },
   mlx: {
     icon: Cpu,
@@ -842,6 +855,7 @@ function EngineGallery({
     provisioning ||
     install.vllm.isPending ||
     install.sglang.isPending ||
+    install.litertLm.isPending ||
     install.mlx.isPending ||
     install.rapidMlx.isPending ||
     install.mlxVlm.isPending ||
@@ -851,6 +865,7 @@ function EngineGallery({
     install.laya.isPending ||
     install.updateVllm.isPending ||
     install.updateSglang.isPending ||
+    install.updateLitertLm.isPending ||
     install.updateMlx.isPending ||
     install.updateRapidMlx.isPending ||
     install.updateMlxVlm.isPending ||
@@ -866,6 +881,7 @@ function EngineGallery({
   const installFor = (e: CatalogEngine) => {
     if (e.installEndpoint === '/api/v1/engines/vllm') return install.vllm
     if (e.installEndpoint === '/api/v1/engines/sglang') return install.sglang
+    if (e.installEndpoint === '/api/v1/engines/litert-lm') return install.litertLm
     if (e.installEndpoint === '/api/v1/engines/mlx') return install.mlx
     if (e.installEndpoint === '/api/v1/engines/rapid-mlx') return install.rapidMlx
     if (e.installEndpoint === '/api/v1/engines/mlx-vlm') return install.mlxVlm
@@ -878,6 +894,7 @@ function EngineGallery({
   const updateFor = (e: CatalogEngine) => {
     if (e.installEndpoint === '/api/v1/engines/vllm') return install.updateVllm
     if (e.installEndpoint === '/api/v1/engines/sglang') return install.updateSglang
+    if (e.installEndpoint === '/api/v1/engines/litert-lm') return install.updateLitertLm
     if (e.installEndpoint === '/api/v1/engines/mlx') return install.updateMlx
     if (e.installEndpoint === '/api/v1/engines/rapid-mlx') return install.updateRapidMlx
     if (e.installEndpoint === '/api/v1/engines/mlx-vlm') return install.updateMlxVlm

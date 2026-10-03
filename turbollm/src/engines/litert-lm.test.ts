@@ -1,0 +1,133 @@
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { join } from 'node:path'
+import { test, type TestContext } from 'node:test'
+import {
+  classifyLitertLmBlocker,
+  litertLmConfigPath,
+  litertLmLoadFailureMessage,
+  litertLmModelRef,
+  litertLmPathBlocker,
+  litertLmProfileToConfig,
+  litertLmServerCommand,
+  warmUpLitertLm,
+  writeLitertLmConfig,
+} from './litert-lm'
+import { tmpDir } from '../test-support/tmp'
+
+test('litertLmProfileToConfig: GPU layers on a machine with a GPU select the gpu backend', () => {
+  assert.equal(litertLmProfileToConfig({ ctx: 4096, ngl: 99, threads: 0 }, true).default.backend, 'gpu')
+})
+
+test('litertLmProfileToConfig: no GPU, or zero GPU layers, selects the cpu backend', () => {
+  assert.equal(litertLmProfileToConfig({ ctx: 4096, ngl: 99, threads: 0 }, false).default.backend, 'cpu')
+  assert.equal(litertLmProfileToConfig({ ctx: 4096, ngl: 0, threads: 0 }, true).default.backend, 'cpu')
+})
+
+test('litertLmProfileToConfig: ctx becomes max_num_tokens and threads becomes cpu_thread_count only when set', () => {
+  assert.deepEqual(litertLmProfileToConfig({ ctx: 8192, ngl: 0, threads: 6 }, false), {
+    default: { backend: 'cpu', max_num_tokens: 8192, cpu_thread_count: 6 },
+  })
+  const auto = litertLmProfileToConfig({ ctx: 0, ngl: 0, threads: 0 }, false)
+  assert.deepEqual(auto, { default: { backend: 'cpu' } })
+  assert.ok(!('cpu_thread_count' in auto.default))
+  assert.ok(!('max_num_tokens' in auto.default))
+})
+
+test('litertLmPathBlocker: a comma anywhere in the path is refused, a clean path is not', () => {
+  assert.match(litertLmPathBlocker('/models/a,b/model.litertlm') ?? '', /comma/)
+  assert.match(litertLmPathBlocker('/models/model,v2.litertlm') ?? '', /comma/)
+  assert.equal(litertLmPathBlocker('/models/my model (v2)/model.litertlm'), null)
+})
+
+test('litertLmModelRef sends the model file path itself', () => {
+  assert.equal(litertLmModelRef('/models/m.litertlm'), '/models/m.litertlm')
+})
+
+test('litertLmServerCommand: runs the CLI as a module with an explicit config, host and port, extra args last', () => {
+  assert.deepEqual(litertLmServerCommand('/venv/bin/python', '/data/cfg.json', 8085, '127.0.0.1', ['--verbose']), {
+    cmd: '/venv/bin/python',
+    args: ['-m', 'litert_lm_cli.main', 'serve', '--config', '/data/cfg.json', '--host', '127.0.0.1', '--port', '8085', '--verbose'],
+  })
+  assert.deepEqual(litertLmServerCommand('py', 'c.json', 1, 'h').args.slice(-2), ['--port', '1'])
+})
+
+test('the config file is per port and round-trips what was written', (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-cfg-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const a = litertLmConfigPath(dir, 8081)
+  const b = litertLmConfigPath(dir, 8082)
+  assert.notEqual(a, b)
+  assert.equal(a, join(dir, 'engines', 'litert-lm', 'config-8081.json'))
+  writeLitertLmConfig(a, { default: { backend: 'gpu', max_num_tokens: 2048 } })
+  writeLitertLmConfig(b, { default: { backend: 'cpu' } })
+  assert.deepEqual(JSON.parse(readFileSync(a, 'utf8')), { default: { backend: 'gpu', max_num_tokens: 2048 } })
+  assert.deepEqual(JSON.parse(readFileSync(b, 'utf8')), { default: { backend: 'cpu' } })
+  assert.ok(existsSync(a) && existsSync(b))
+})
+
+test('classifyLitertLmBlocker: an unsupported platform/arch is named as having no build', () => {
+  for (const [platform, arch] of [['darwin', 'x64'], ['win32', 'arm64'], ['freebsd', 'x64']] as const) {
+    assert.match(classifyLitertLmBlocker(platform, arch, new Error('x')), /only for Windows x64, Linux x64\/arm64 and macOS on Apple Silicon/)
+  }
+})
+
+test('classifyLitertLmBlocker: a supported platform reports a load failure with the last stderr line, capped', () => {
+  for (const [platform, arch] of [['win32', 'x64'], ['linux', 'x64'], ['linux', 'arm64'], ['darwin', 'arm64']] as const) {
+    const msg = classifyLitertLmBlocker(platform, arch, new Error('Traceback\r\nImportError: libc too old'))
+    assert.doesNotMatch(msg, /no build/)
+    assert.match(msg, /ImportError: libc too old/)
+    assert.match(msg, /glibc 2\.27/)
+  }
+  const long = classifyLitertLmBlocker('linux', 'x64', new Error('E: ' + 'x'.repeat(5000)))
+  assert.ok(long.length < 600)
+})
+
+test('litertLmLoadFailureMessage: the hint depends on the backend', () => {
+  assert.match(litertLmLoadFailureMessage('boom', 'gpu'), /GPU layers to 0/)
+  assert.match(litertLmLoadFailureMessage('boom', 'cpu'), /complete \.litertlm bundle/)
+  assert.match(litertLmLoadFailureMessage('boom', 'cpu'), /— boom\./)
+})
+
+// ── warm-up against a local stand-in for `litert-lm serve` ───────────────────
+function fakeServe(t: TestContext, status: number, statusText: string, seen: { body?: Record<string, unknown> }): Promise<number> {
+  return new Promise((resolve) => {
+    const server: Server = createServer((req, res) => {
+      let raw = ''
+      req.on('data', (c) => { raw += c })
+      req.on('end', () => {
+        seen.body = JSON.parse(raw || '{}')
+        res.statusMessage = statusText
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end('{}')
+      })
+    })
+    t.after(() => { server.close() })
+    server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port))
+  })
+}
+
+test('warmUpLitertLm: a 200 means the model loaded; it asks for exactly one token via max_completion_tokens', async (t) => {
+  const seen: { body?: Record<string, unknown> } = {}
+  const port = await fakeServe(t, 200, 'OK', seen)
+  const res = await warmUpLitertLm(port, '/models/m.litertlm', AbortSignal.timeout(5000))
+  assert.deepEqual(res, { ok: true })
+  assert.equal(seen.body?.model, '/models/m.litertlm')
+  assert.equal(seen.body?.max_completion_tokens, 1)
+  assert.equal('max_tokens' in (seen.body ?? {}), false)
+  assert.equal(seen.body?.stream, false)
+})
+
+test('warmUpLitertLm: a 500 returns the runtime message carried in the status text', async (t) => {
+  const port = await fakeServe(t, 500, 'Failed to load engine: RuntimeError(bad bundle)', {})
+  const res = await warmUpLitertLm(port, '/m.litertlm', AbortSignal.timeout(5000))
+  assert.equal(res.ok, false)
+  assert.match((res as { message: string }).message, /Failed to load engine: RuntimeError\(bad bundle\)/)
+})
+
+test('warmUpLitertLm: nothing listening is reported as a failure, not thrown', async () => {
+  const res = await warmUpLitertLm(1, '/m.litertlm', AbortSignal.timeout(2000))
+  assert.equal(res.ok, false)
+})

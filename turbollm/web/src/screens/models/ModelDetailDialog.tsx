@@ -5,7 +5,7 @@ import { useModelLoader } from '../../lib/model-loader'
 import { useBenchActions, useBenchState, useEngines, useModelActions, useModelDetail, useModelPresetMutations, useModelPresets, useModels, useStatus } from '../../lib/queries'
 import type { CardSampling, LoadProfile, ModelPreset, SysGpu } from '../../lib/types'
 import { Input } from '../../components/ui/input'
-import { defaultGpu, defaultVllm } from '../../lib/types'
+import { defaultGpu, defaultLitertLm, defaultVllm } from '../../lib/types'
 import { loadModeFor } from '../../lib/load-mode'
 import { estimateVram, gpuBudgetMb } from '../../lib/vram'
 import { tokenizeExtraArgs } from '../../lib/argv'
@@ -414,6 +414,9 @@ export function ModelDetailDialog({
   const setV = <K extends keyof LoadProfile['vllm']>(k: K, v: LoadProfile['vllm'][K]) =>
     setDraft((d) => (d ? { ...d, vllm: { ...(d.vllm ?? defaultVllm()), [k]: v } } : d))
 
+  const setL = <K extends keyof NonNullable<LoadProfile['litertLm']>>(k: K, v: NonNullable<LoadProfile['litertLm']>[K]) =>
+    setDraft((d) => (d ? { ...d, litertLm: { ...(d.litertLm ?? defaultLitertLm()), [k]: v } } : d))
+
   const loadError = failureOf(loader.loadError, detail?.key)
 
   // Auto-tune (spec 09 §1). A run owns the engine exclusively, so a loaded model must
@@ -431,6 +434,7 @@ export function ModelDetailDialog({
   const isRapidMlx = loadMode === 'rapid-mlx'
   const isMlxVlm = loadMode === 'mlx-vlm'
   const isVllm = loadMode === 'vllm'
+  const isLitertLm = loadMode === 'litert-lm'
   // The runner requires a free engine (409 otherwise). When this model is loaded,
   // stop it first, then start the sweep once the engine has settled.
   const startBenchRun = () => {
@@ -605,6 +609,60 @@ export function ModelDetailDialog({
                 <Toggle label="Enforce eager" hint="vLLM --enforce-eager. Skips CUDA graphs: less VRAM, somewhat slower." value={draft.vllm?.enforceEager ?? false} onChange={(v) => setV('enforceEager', v)} />
                 <Toggle label="Trust remote code" hint="vLLM --trust-remote-code. Needed for models that ship custom modelling code." value={draft.vllm?.trustRemoteCode ?? false} onChange={(v) => setV('trustRemoteCode', v)} />
               </Section>
+            )}
+
+            {isLitertLm && (
+              <>
+                <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 text-[12px] text-muted">
+                  LiteRT-LM runs a single-file <span className="text-ink">.litertlm</span> bundle on the CPU or the GPU — it
+                  has no partial offload, no KV-cache or batch knobs. The first request after loading compiles and
+                  loads the model, which can take a minute or more.
+                </div>
+                <Section>
+                  <Row
+                    label="Backend"
+                    hint="Auto uses the GPU when one is detected and GPU layers is above 0. Choose GPU to force it where the GPU can't be detected (e.g. Android/Termux); choose CPU to avoid GPU compile time and driver issues."
+                  >
+                    <Segmented
+                      value={({ auto: 'Auto', cpu: 'CPU', gpu: 'GPU' } as const)[draft.litertLm?.backend ?? 'auto']}
+                      options={['Auto', 'CPU', 'GPU']}
+                      onChange={(v) => { track('models', 'set_litert_backend'); setL('backend', v.toLowerCase() as 'auto' | 'cpu' | 'gpu') }}
+                    />
+                  </Row>
+                  <Slider
+                    label="Context length"
+                    hint={detail.nativeCtx > 0 ? `This bundle was exported for ${detail.nativeCtx.toLocaleString()} tokens; a longer value is capped by the bundle.` : 'Tokens of history (KV-cache length). A bundle exported with a shorter limit still caps it.'}
+                    value={draft.ctx}
+                    min={512}
+                    max={Math.max(512, detail.nativeCtx || 32768)}
+                    step={512}
+                    onChange={(v) => set('ctx', v)}
+                    fmt={(v) => v.toLocaleString()}
+                  />
+                  <Slider
+                    label="CPU threads"
+                    hint={
+                      draft.threads === 0
+                        ? 'Auto — the runtime chooses. Only used by the CPU backend.'
+                        : `${draft.threads} of ${detail.cores || '?'} cores. Only used by the CPU backend.`
+                    }
+                    value={draft.threads}
+                    min={0}
+                    max={Math.max(1, detail.cores || 64)}
+                    step={1}
+                    onChange={(v) => set('threads', v)}
+                    fmt={(v) => (v === 0 ? 'Auto' : String(v))}
+                  />
+                  <Row label="Engine port" hint="Pin this model's engine to a specific port instead of auto-assigning the first free one. Falls back to auto if taken.">
+                    <DefaultableNumberInput value={draft.port || undefined} placeholder="auto" min={1024} max={65535} onChange={(v) => set('port', v)} />
+                  </Row>
+                  {statusQ.data?.engine.launchCommand && (
+                    <Row label="Launch command" hint="The exact command TurboLLM spawned this model with.">
+                      <CopyButton text={statusQ.data.engine.launchCommand} label="Copy" size={14} screen="models" />
+                    </Row>
+                  )}
+                </Section>
+              </>
             )}
 
             {isLlamaCpp && (
@@ -877,7 +935,7 @@ export function ModelDetailDialog({
             )}
             </>)}
 
-            {(isLlamaCpp || isVllm) && (
+            {(isLlamaCpp || isVllm || isLitertLm) && (
               <>
                 <SectionTitle>Custom flags</SectionTitle>
                 <Section>

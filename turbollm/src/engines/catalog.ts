@@ -443,7 +443,7 @@ const ALL: CatalogEngine[] = [
     platforms: ['win32', 'linux', 'darwin', 'android'],
     support: 'experimental',
     installEndpoint: '/api/v1/engines/litert-lm',
-    note: 'Runs .litertlm models only (not GGUF). CPU or GPU. Native builds exist only for Windows x64, Linux x64/arm64, macOS Apple Silicon and Android. A small install — no torch or CUDA. On Android it needs TurboLLM running inside Termux with `pkg install python`; the standalone Android app has no Python.',
+    note: 'Runs .litertlm models only (not GGUF). CPU or GPU. Native builds exist only for Windows x64, Linux x64/arm64, macOS Apple Silicon and Android. A small install — no torch or CUDA. The first load of a model can be slow (a minute or more). On Android it needs TurboLLM running inside Termux with `pkg install python`; the standalone Android app has no Python.',
     defaultBranch: 'main',
     variants: [
       {

@@ -19,6 +19,7 @@ import {
   litertLmServeBlockerCached,
   litertLmServerCommand,
   pickAndroidWheel,
+  resetLitertLmServeCache,
   warmUpLitertLm,
   writeLitertLmConfig,
 } from './litert-lm'
@@ -293,6 +294,52 @@ test('litertLmServeBlocker: a timed-out probe reports the timeout, not a broken 
   const msg = await litertLmServeBlocker(py, undefined, 1_000)
   assert.match(msg ?? '', /did not finish/)
   assert.doesNotMatch(msg ?? '', /could not load/)
+})
+
+// ── the cache must not survive a reinstall (PR #271 re-review) ──
+// The Android provision unpacks the native wheel with `zipfile -e` OVER the old files: every
+// file inside litert_lm/ is rewritten, but no directory entry is added or removed — and a
+// directory's mtime (the fingerprint's key) only changes when entries come and go. The
+// fingerprint therefore CANNOT see an in-place reinstall, so ensureLitertLmEnv clears the
+// cache in a finally instead. These tests lock both halves of that reasoning.
+
+test('litertLmEnvFingerprint: an in-place file rewrite (the zipfile -e reinstall shape) does not change the key', (t: TestContext) => {
+  const env = tmpDir('turbollm-litert-fp-inplace-')
+  t.after(() => rmSync(env, { recursive: true, force: true }))
+  const py = join(env, 'bin', 'python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, '')
+  const pkg = join(env, 'lib', 'python3.12', 'site-packages', 'litert_lm')
+  mkdirSync(join(pkg, 'native'), { recursive: true })
+  const so = join(pkg, 'native', 'liblitert-lm.so')
+  writeFileSync(so, 'old-bytes')
+
+  const before = litertLmEnvFingerprint(py)
+  // The reinstall shape: same entry set, new file CONTENT and mtime.
+  const later = new Date(Date.now() + 5000)
+  utimesSync(so, later, later)
+  assert.equal(litertLmEnvFingerprint(py), before, 'an overwritten-in-place file is invisible to the key — hence resetLitertLmServeCache')
+})
+
+test('litertLmServeBlockerCached: resetLitertLmServeCache drops the answer so the next load re-probes', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-cachereset-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const runs = join(dir, 'runs')
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`)
+  chmodSync(py, 0o755)
+
+  const first = await litertLmServeBlockerCached(py)
+  assert.ok(first, 'a failing interpreter yields a blocker')
+  assert.equal(await litertLmServeBlockerCached(py), first, 'and it is served from the cache')
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run', 'one probe so far')
+
+  // A provision finished (ensureLitertLmEnv's finally) — the next load must re-measure the
+  // new files, not replay the verdict about the old ones.
+  resetLitertLmServeCache()
+  await litertLmServeBlockerCached(py)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the probe re-ran after the reset')
 })
 
 test('litertLmPrefillStats: prompt tokens over time-to-first-token, rounded to one decimal', () => {

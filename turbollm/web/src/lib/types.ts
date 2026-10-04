@@ -980,8 +980,9 @@ export type VllmProfile = {
   trustRemoteCode: boolean
 }
 
-/** LiteRT-LM load controls. `auto` = GPU when one is detected and GPU layers > 0; `gpu` forces it (needed where the
- *  GPU cannot be detected, e.g. Android/Termux); `cpu` forces CPU. */
+/** LiteRT-LM load controls. `auto` = GPU when one is detected and the default GPU layers is above 0 (litert-lm.ts
+ *  litertLmProfileToConfig — the GPU-layers SLIDER is a llama.cpp control and is not shown for LiteRT-LM); `gpu` forces
+ *  it (needed where the GPU cannot be detected, e.g. Android/Termux); `cpu` forces CPU. */
 export type LitertLmProfile = { backend: 'auto' | 'cpu' | 'gpu' }
 
 export function defaultLitertLm(): LitertLmProfile {

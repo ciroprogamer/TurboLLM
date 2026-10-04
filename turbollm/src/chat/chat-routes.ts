@@ -1101,7 +1101,12 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       // depends on the loaded model's chat template matching one of mlx-vlm's built-in
       // tool parsers (see the MLX-VLM catalog note) — not a crash risk, just a
       // per-architecture no-op some of the time.
-      const toolsSupported = engineKind !== 'vllm' && engineKind !== 'sglang' && toolDefs.length > 0
+      // LiteRT-LM is withheld until its server is verified to honor `tools` (PR #271
+      // review): nothing in its CLI/docs shows tool-call support, and silently sending
+      // the array risks agent/Code turns that look like they have tools but never call
+      // them. Harmless either way: the model just answers without tools.
+      const toolsSupported =
+        engineKind !== 'vllm' && engineKind !== 'sglang' && engineKind !== 'litert-lm' && toolDefs.length > 0
       if (toolsSupported) reqBody.tools = toolDefs
       // Force web_search on the first two iterations when the conversation has a
       // force_web_search policy (e.g. Research persona). This guarantees at least

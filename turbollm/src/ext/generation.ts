@@ -272,8 +272,10 @@ async function runGenerationLoop(d: Deps, ctx: GenerationCtx, emit: EmitSink, si
 
   // vLLM is strict about a `tools` array defaulting tool_choice to "auto" unless launched with
   // --enable-auto-tool-choice (chat-routes.ts's own BUG note) — same engine-kind gate here.
+  // LiteRT-LM is withheld too, until its server is verified to honor `tools` (PR #271 review).
   const toolDefs = d.tools ? await d.tools.buildToolDefinitions() : []
-  const toolsSupported = engineKind !== 'vllm' && engineKind !== 'sglang' && toolDefs.length > 0
+  const toolsSupported =
+    engineKind !== 'vllm' && engineKind !== 'sglang' && engineKind !== 'litert-lm' && toolDefs.length > 0
 
   const messages: WireMessage[] = ctx.engineMessages.map((m) => ({ role: m.role, content: m.content }))
 

@@ -85,6 +85,18 @@ test('?update=1 with an unreachable upstream still provisions (no honest answer 
   assert.equal(((await res.json()) as { accepted: boolean }).accepted, true)
 })
 
+test('?update=1 with an INCOMPARABLE installed version still provisions (not a false "already latest")', async () => {
+  // PR #271 review: an installed version that can't be ordered against PyPI's latest (a
+  // custom/unparsable build string) yields hasUpdate:false, comparable:false. The old check
+  // treated that as "already latest" and refused the upgrade while telling the user they
+  // were current — only a COMPARABLE no-update answer may short-circuit.
+  const { app, provisionCalls } = appWithChecker(async () => '0.18.0', 'custom-build')
+  const res = await app.request('/api/v1/engines/litert-lm?update=1', { method: 'POST' })
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as { accepted: boolean }).accepted, true)
+  assert.ok(provisionCalls.includes('start:litert-lm'))
+})
+
 test('a plain install (no ?update=1) never consults the upstream and always provisions', async () => {
   const { app, provisionCalls } = appWithChecker(async () => '0.17.1')
   const res = await app.request('/api/v1/engines/litert-lm', { method: 'POST' })

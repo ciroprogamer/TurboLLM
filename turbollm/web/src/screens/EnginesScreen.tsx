@@ -951,12 +951,15 @@ function EngineGallery({
       onError: (err) => toast.error(err instanceof ApiError ? err.message : `Could not disable ${e.name}.`),
     })
   }
-  // "Check for update" (the card knows of no update): a LIVE status re-check, never a
+  // "Check for update" for LiteRT-LM (the card knows of no update): a LIVE status re-check, never a
   // re-provision. The update POST always answers 202 and lights the global "Downloading…"
   // banner — pip resolves to the same version and installs nothing, so the banner was a lie
   // that ran for however long `uv pip install -U` took (the reporter's "downloading pop-up
-  // shows even when already latest"). The llama.cpp backend rows already did this honestly;
-  // pip engines now match. Only a card that already knows `hasUpdate` fires the real update.
+  // shows even when already latest"). The llama.cpp backend rows already did this honestly.
+  // SCOPED to LiteRT-LM (PR #271 review): this engine is the one the honest check was
+  // reported broken for; changing what "Check for update" does for the OTHER engines
+  // (vLLM, MLX, KoboldCpp, …) belongs in its own change with coverage for them — their
+  // cards keep the historical re-provision POST via doUpdate's fall-through.
   const checkLive = async (e: CatalogEngine) => {
     track('engines', 'check_engine_update')
     const toastId = `engine-update-check-${e.id}`
@@ -967,13 +970,15 @@ function EngineGallery({
       if (!st) {
         // Engine not registered (e.g. disabled) — no honest status can exist. Fall back to
         // the re-provision path, which is what this action has always meant for a disabled
-        // engine (re-install + re-register).
+        // engine (re-install + re-register). The loading toast is NOT dismissed here: the
+        // mutation owns it now and settles it through onSuccess/onError — dismissing up
+        // front blanked the feedback while the install still ran.
         const m = updateFor(e)
         if (!m) { toast.error(`Could not check ${e.name}.`, { id: toastId }); return }
         m.mutate(undefined, {
+          onSuccess: () => toast.success(`Reinstalling ${e.name}…`, { id: toastId }),
           onError: (err) => toast.error(err instanceof ApiError ? err.message : `Could not update ${e.name}.`, { id: toastId }),
         })
-        toast.dismiss(toastId)
         return
       }
       if (st.error === 'offline') {
@@ -981,7 +986,9 @@ function EngineGallery({
         return
       }
       if (st.error === 'rate_limited') {
-        toast.error('GitHub rate limit reached — add a token in Settings → GitHub.', { id: toastId })
+        // LiteRT-LM checks PyPI, not GitHub — the GitHub-token advice would send the user
+        // fixing a setting that cannot help (PR #271 review). The honest generic wording.
+        toast.error(`The update source is limiting requests — wait a moment and check ${e.name} again.`, { id: toastId })
         return
       }
       if (st.error === 'no_source' || !st.comparable) {
@@ -1002,7 +1009,10 @@ function EngineGallery({
   const doUpdate = (e: CatalogEngine, hasUpdate: boolean) => {
     const m = updateFor(e)
     if (!m) return
-    if (!hasUpdate) { void checkLive(e); return }
+    // Only LiteRT-LM's "Check for update" is the honest live re-check above; every other
+    // engine keeps the re-provision POST this action has always fired (see checkLive's
+    // comment for why the scope is deliberate).
+    if (e.kind === 'litert-lm' && !hasUpdate) { void checkLive(e); return }
     track('engines', 'update_engine')
     m.mutate(undefined, {
       // `alreadyLatest` is the backend's honest refusal (the daemon re-checks at apply time;

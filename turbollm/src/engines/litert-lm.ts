@@ -25,7 +25,7 @@
 // PyPI and unpacked into the venv directly (ensureLitertLmAndroidEnv). The Android APK has no Python at all, so there
 // this engine is only reachable when TurboLLM itself runs inside Termux.
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -254,9 +254,61 @@ export function litertLmPathBlocker(modelPath: string): string | null {
     : null
 }
 
-/** What a LiteRT-LM request must put in its `model` field: the model file's own path (see the header comment). */
-export function litertLmModelRef(modelPath: string): string {
-  return modelPath
+// ── serve preflight, cached per venv ─────────────────────────────────────────────
+
+/** A cheap fingerprint of a LiteRT-LM interpreter's environment: its own mtime plus the
+ *  installed `litert_lm` package dir's mtime ('absent' when there is no recognizable venv
+ *  layout — the interpreter's own mtime still keys the cache). The serve preflight
+ *  (litertLmServeBlocker) spawns a fresh Python process that dlopens the native library —
+ *  up to 60 s, noticeable on a phone — and the Manager runs it on EVERY load and
+ *  auto-resume. The result is stable for an unchanged environment, so the cache is keyed on
+ *  this fingerprint: a reinstall touches the package dir (pip rewrites it wholesale), a
+ *  rebuilt venv touches the interpreter, and either invalidates the cached answer.
+ *  null → the interpreter itself cannot be stat'd (missing, or a bare command name the
+ *  filesystem can't resolve); the caller just runs the probe uncached. */
+export function litertLmEnvFingerprint(python: string): string | null {
+  try {
+    const pyStat = statSync(python)
+    const envDir = dirname(dirname(python)) // <env>/bin/python (POSIX) / <env>/Scripts/python.exe (Windows)
+    const siteDir = process.platform === 'win32'
+      ? join(envDir, 'Lib', 'site-packages')
+      : (() => {
+          const lib = join(envDir, 'lib')
+          if (!existsSync(lib)) return null
+          const ver = readdirSync(lib, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith('python'))
+          return ver ? join(lib, ver.name, 'site-packages') : null
+        })()
+    const pkg = siteDir ? join(siteDir, 'litert_lm') : null
+    const pkgStat = pkg && existsSync(pkg) ? statSync(pkg) : null
+    return `${python}|${pyStat.mtimeMs}|${pkgStat ? pkgStat.mtimeMs : 'absent'}`
+  } catch {
+    return null
+  }
+}
+
+/** The in-flight/cached result of the serve preflight per fingerprint. The PROMISE is cached
+ *  (concurrent loads share one probe), and an abort is neither cached nor returned — it
+ *  propagates so the caller can treat the load as cancelled, not as pass/fail. */
+const serveBlockerCache = new Map<string, Promise<string | null>>()
+
+/** Cached litertLmServeBlocker for the Manager's per-load preflight (see
+ *  litertLmEnvFingerprint for why the probe is worth caching). Install-time callers
+ *  (ensureLitertLmAndroidEnv) use the plain uncached litertLmServeBlocker on purpose: they
+ *  have just written the environment and must see what they built. */
+export function litertLmServeBlockerCached(python: string, signal?: AbortSignal): Promise<string | null> {
+  const key = litertLmEnvFingerprint(python)
+  if (!key) return litertLmServeBlocker(python, signal)
+  const hit = serveBlockerCache.get(key)
+  if (hit) return hit
+  const probe = litertLmServeBlocker(python, signal)
+  serveBlockerCache.set(key, probe)
+  // A probe that rejects (litertLmServeBlocker re-throws an abort; a spawn failure rejects)
+  // answered nothing — drop it so a later load re-runs the probe instead of a cached
+  // rejection. Settled answers (null = OK, or a blocker message) stay cached.
+  probe.catch(() => {
+    if (serveBlockerCache.get(key) === probe) serveBlockerCache.delete(key)
+  })
+  return probe
 }
 
 /** The settings TurboLLM drives through LiteRT-LM's `--config` file. Every key is one the 0.17 schema accepts. */
@@ -362,8 +414,11 @@ export async function warmUpLitertLm(port: number, modelRef: string, signal: Abo
 
 /** The user-facing text for a failed warm-up: the runtime's message plus the two causes that account for most of them. */
 export function litertLmLoadFailureMessage(reason: string, backend: 'cpu' | 'gpu'): string {
+  // The GPU hint must name a control the LiteRT-LM panel actually offers: "set GPU layers to
+  // 0" is llama.cpp advice — the GPU-layers slider is not rendered for LiteRT-LM, whose
+  // backend is chosen outright on the model's load panel.
   const hint = backend === 'gpu'
-    ? 'If this model does not run on your GPU, set GPU layers to 0 to use the CPU backend.'
+    ? 'If this model does not run on your GPU, switch the Backend setting to CPU on the model\'s load panel and load it again.'
     : 'Check that the file is a complete .litertlm bundle supported by this LiteRT-LM version.'
   return `LiteRT-LM could not load this model — ${reason}. ${hint}`
 }

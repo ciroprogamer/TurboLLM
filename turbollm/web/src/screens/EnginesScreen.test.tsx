@@ -14,6 +14,7 @@ import type { CatalogEngine, Engine, EngineFit, EngineVariant } from '../lib/typ
 const installLayaMutate = vi.fn()
 const installLitertLmMutate = vi.fn()
 const updateLitertLmMutate = vi.fn()
+const updateMlxMutate = vi.fn()
 const getEngineUpdatesMock = vi.fn()
 
 function engine(over: Partial<Engine> & { id: string; name: string }): Engine {
@@ -82,7 +83,7 @@ vi.mock('../lib/queries', async (importOriginal) => {
         cancel: noop, remove: noop, enableBackend: noop,
         updateVllm: noop, updateSglang: noop,
         updateLitertLm: { mutate: updateLitertLmMutate, isPending: false },
-        updateMlx: noop, updateRapidMlx: noop, updateMlxVlm: noop,
+        updateMlx: { mutate: updateMlxMutate, isPending: false }, updateRapidMlx: noop, updateMlxVlm: noop,
         updateLaya: noop, updateTurboquant: noop, updateKoboldcpp: noop, updateLlamafile: noop, updateBackend: noop,
       }
     },
@@ -120,6 +121,7 @@ beforeEach(() => {
   installLayaMutate.mockClear()
   installLitertLmMutate.mockClear()
   updateLitertLmMutate.mockClear()
+  updateMlxMutate.mockClear()
   getEngineUpdatesMock.mockReset()
 })
 
@@ -221,6 +223,52 @@ describe('EnginesScreen — LiteRT-LM check/update actions', () => {
     const menu = await openLitertMenu()
     await userEvent.click(within(menu).getByText('Update now'))
     expect(updateLitertLmMutate).toHaveBeenCalled()
+    expect(getEngineUpdatesMock).not.toHaveBeenCalled()
+  })
+})
+
+// ── every OTHER engine keeps the historical "Check for update" behavior (PR #271 review) ──
+// The honest live re-check is scoped to LiteRT-LM only: changing what the shared action does
+// for vLLM/MLX/SGLang/KoboldCpp/llamafile/TurboQuant belongs in its own change with coverage
+// for those engines. Their cards must keep firing the update POST (the re-provision), not
+// the live GET /engines/updates?refresh=1.
+const MLX_LIVE_ENGINE = engine({ id: 'mlx-1', name: 'MLX (mlx-lm 0.31.2)', kind: 'mlx' })
+
+const MLX_CATALOG: CatalogEngine = {
+  id: 'mlx', name: 'MLX', kind: 'mlx', description: 'Native Apple Silicon',
+  provision: 'pip', homepage: 'https://github.com/ml-explore/mlx-lm',
+  platforms: ['darwin'], support: 'stable',
+  installEndpoint: '/api/v1/engines/mlx', supportedHere: true, installed: true, enabled: true,
+}
+
+const MLX_VARIANT: EngineVariant = {
+  id: 'mlx-mac-arm64', label: 'macOS (Apple Silicon)', repo: 'ml-explore/mlx-lm',
+  requires: { platform: ['darwin'], arch: ['arm64'] }, stability: 'stable', hasPrebuilt: true,
+}
+
+const MLX_FIT: EngineFit = {
+  engine: MLX_CATALOG,
+  variants: [MLX_VARIANT],
+  compatible: [MLX_VARIANT],
+  recommended: false,
+}
+
+describe('EnginesScreen — non-LiteRT engines keep the update POST from "Check for update"', () => {
+  it('the MLX card fires its update mutation, never the live re-check', async () => {
+    state.engines = [MLX_LIVE_ENGINE]
+    state.activeEngineId = 'mlx-1'
+    state.catalog = [MLX_CATALOG]
+    state.fits = [MLX_FIT]
+    state.updates = {}
+    getEngineUpdatesMock.mockResolvedValue({ updates: {}, policies: {} })
+    renderScreen()
+    // 'MLX' alone is not unique (the "Running now" dropdown's group label is also 'MLX'),
+    // so the card is located through its catalog description.
+    const card = (await screen.findByText('Native Apple Silicon')).closest('.flex.flex-col.rounded-xl')!
+    await userEvent.click(within(card as HTMLElement).getByRole('button', { name: 'Actions for MLX' }))
+    const menu = await screen.findByRole('menu')
+    await userEvent.click(within(menu).getByText('Check for update'))
+    expect(updateMlxMutate).toHaveBeenCalled()
     expect(getEngineUpdatesMock).not.toHaveBeenCalled()
   })
 })

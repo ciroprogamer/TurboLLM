@@ -19,9 +19,8 @@ import { sglangServerCommand, sgLangServeBlocker } from './sglang'
 import {
   litertLmConfigPath,
   litertLmLoadFailureMessage,
-  litertLmModelRef,
   litertLmPathBlocker,
-  litertLmServeBlocker,
+  litertLmServeBlockerCached,
   litertLmServerCommand,
   warmUpLitertLm,
   writeLitertLmConfig,
@@ -332,7 +331,11 @@ export class Manager {
     }
 
     if (opts.engine.kind === 'litert-lm') {
-      const blocker = litertLmPathBlocker(opts.modelPath) ?? (await litertLmServeBlocker(opts.engine.binPath))
+      // Cached probe (litertLmServeBlockerCached): this runs on EVERY load and auto-resume,
+      // and the probe spawns a fresh Python process that dlopens the native library —
+      // noticeable on a phone. The result is stable for an unchanged venv, so it is cached
+      // per interpreter + installed-package mtime and only re-run after a reinstall.
+      const blocker = litertLmPathBlocker(opts.modelPath) ?? (await litertLmServeBlockerCached(opts.engine.binPath))
       if (blocker) {
         this.state = 'error'
         this.errInfo = { code: 'engine_unsupported', message: blocker, exitCode: -1, logTail: [] }
@@ -651,18 +654,22 @@ export class Manager {
     // the process dies. Without it the last line stays "...server is listening on
     // <port>" forever, contradicting the Error state shown above it (the reported bug).
     const cleanStop = this.state === 'stopping' || this.state === 'stopped'
-    // readiness() already recorded the real diagnosis (readiness_timeout) and SIGKILLed
-    // the process itself before this 'close' event fires — don't let the generic
-    // "exited unexpectedly" message from that kill's own aftermath clobber it (the
-    // reporter on GitHub #85 saw exactly that: a useless "exit -1" instead of "didn't
-    // become ready in time").
-    const timedOut = this.state === 'error' && this.errInfo?.code === 'readiness_timeout'
+    // readiness() already recorded the real diagnosis and SIGKILLed the process itself
+    // before this 'close' event fires — don't let the generic "exited unexpectedly" message
+    // from that kill's own aftermath clobber it. Two diagnoses are protected: the readiness
+    // timeout (GitHub #85 saw a useless "exit -1" instead of "didn't become ready in
+    // time"), and a model-load failure detected either in a Python engine's log tail or by
+    // the LiteRT-LM warm-up (a bad bundle / unusable GPU must keep its actionable message —
+    // litertLmLoadFailureMessage — rather than degrade to "exited unexpectedly").
+    const preDiagnosed =
+      this.state === 'error' &&
+      (this.errInfo?.code === 'readiness_timeout' || this.errInfo?.code === 'model_load_failed')
     try {
       logStream.write(
         cleanStop
           ? `\n[turbollm] engine stopped — the model is no longer loaded.\n`
-          : timedOut
-            ? `\n[turbollm] engine process killed after the readiness timeout above. The model did NOT load.\n`
+          : preDiagnosed
+            ? `\n[turbollm] engine process killed after the failure diagnosed above. The model did NOT load.\n`
             : `\n[turbollm] engine process exited unexpectedly (exit ${code})` +
                 `${errMsg ? ` — ${errMsg}` : ''}. The model did NOT load / is no longer loaded.\n`,
       )
@@ -672,7 +679,7 @@ export class Manager {
     logStream.end()
     if (cleanStop) {
       this.state = 'stopped'
-    } else if (!timedOut) {
+    } else if (!preDiagnosed) {
       this.state = 'error'
       this.errInfo = {
         code: errMsg ? 'engine_spawn_failed' : 'engine_exited',
@@ -724,7 +731,10 @@ export class Manager {
           const backend = this.opts.litertLmConfig?.default.backend ?? 'cpu'
           const res = await warmUpLitertLm(
             port,
-            litertLmModelRef(this.opts.modelPath),
+            // The `model` field the warm-up must send is exactly what every real request
+            // sends: the model file's own path (engineModelAlias('litert-lm', path) resolves
+            // to the same thing — there is deliberately no second wrapper for it).
+            this.opts.modelPath,
             AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
           )
           if (!res.ok) {

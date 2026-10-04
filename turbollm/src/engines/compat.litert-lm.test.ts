@@ -50,9 +50,37 @@ test('applyEngineTokenLimit: LiteRT-LM gets max_completion_tokens instead of max
   assert.deepEqual(applyEngineTokenLimit('litert-lm', { model: 'm', max_tokens: 256 }), { model: 'm', max_completion_tokens: 256 })
 })
 
-test('applyEngineTokenLimit: an explicit max_completion_tokens wins, and no cap stays no cap', () => {
-  assert.deepEqual(applyEngineTokenLimit('litert-lm', { max_tokens: 10, max_completion_tokens: 20 }), { max_completion_tokens: 20 })
+test('applyEngineTokenLimit: an explicit max_completion_tokens ABOVE the cap is clamped to it (the cap cannot be bypassed)', () => {
+  // The regression (PR #271 review): the gateway clamps `max_tokens` against the daemon's
+  // max-token limit, then this function used to let an explicit client
+  // `max_completion_tokens` win and DELETED the clamped value — so a client could send
+  // max_completion_tokens: 1000000 and run uncapped on litert-lm. The merged value must
+  // respect the clamped `max_tokens`.
+  assert.deepEqual(
+    applyEngineTokenLimit('litert-lm', { max_tokens: 4096, max_completion_tokens: 1_000_000 }),
+    { max_completion_tokens: 4096 },
+  )
+})
+
+test('applyEngineTokenLimit: a smaller explicit max_completion_tokens is honoured, and no cap stays no cap', () => {
+  // Both keys name the same cap, so the SMALLER wins — never more than what the clamped
+  // max_tokens allows, but also never less than the caller explicitly asked for.
+  assert.deepEqual(
+    applyEngineTokenLimit('litert-lm', { max_tokens: 4096, max_completion_tokens: 50 }),
+    { max_completion_tokens: 50 },
+  )
+  assert.deepEqual(
+    applyEngineTokenLimit('litert-lm', { max_tokens: 10, max_completion_tokens: 20 }),
+    { max_completion_tokens: 10 },
+  )
   assert.deepEqual(applyEngineTokenLimit('litert-lm', { model: 'm' }), { model: 'm' })
+})
+
+test('applyEngineTokenLimit: non-numeric values pass through untouched rather than becoming NaN', () => {
+  assert.deepEqual(
+    applyEngineTokenLimit('litert-lm', { max_tokens: 4096, max_completion_tokens: 'weird' }),
+    { max_completion_tokens: 'weird' },
+  )
 })
 
 test('applyEngineTokenLimit: every other engine is left untouched', () => {

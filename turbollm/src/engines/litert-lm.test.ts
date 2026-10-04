@@ -1,20 +1,21 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import {
   androidWheelAbi,
   classifyLitertLmBlocker,
   litertLmConfigPath,
+  litertLmEnvFingerprint,
   litertLmLoadFailureMessage,
-  litertLmModelRef,
   litertLmPathBlocker,
   litertLmPrefillStats,
   litertLmProfileToConfig,
   litertLmServeBlocker,
+  litertLmServeBlockerCached,
   litertLmServerCommand,
   pickAndroidWheel,
   warmUpLitertLm,
@@ -45,10 +46,6 @@ test('litertLmPathBlocker: a comma anywhere in the path is refused, a clean path
   assert.match(litertLmPathBlocker('/models/a,b/model.litertlm') ?? '', /comma/)
   assert.match(litertLmPathBlocker('/models/model,v2.litertlm') ?? '', /comma/)
   assert.equal(litertLmPathBlocker('/models/my model (v2)/model.litertlm'), null)
-})
-
-test('litertLmModelRef sends the model file path itself', () => {
-  assert.equal(litertLmModelRef('/models/m.litertlm'), '/models/m.litertlm')
 })
 
 test('litertLmServerCommand: runs the CLI as a module with an explicit config, host and port, extra args last', () => {
@@ -90,8 +87,11 @@ test('classifyLitertLmBlocker: a supported platform reports a load failure with 
   assert.ok(long.length < 600)
 })
 
-test('litertLmLoadFailureMessage: the hint depends on the backend', () => {
-  assert.match(litertLmLoadFailureMessage('boom', 'gpu'), /GPU layers to 0/)
+test('litertLmLoadFailureMessage: the GPU hint names the Backend control, which is the one the LiteRT-LM panel actually offers', () => {
+  // "Set GPU layers to 0" is llama.cpp advice — that slider is not rendered for LiteRT-LM
+  // (PR #271 review), so the hint must point at the real recovery path: Backend → CPU.
+  assert.match(litertLmLoadFailureMessage('boom', 'gpu'), /Backend setting to CPU/)
+  assert.doesNotMatch(litertLmLoadFailureMessage('boom', 'gpu'), /GPU layers/)
   assert.match(litertLmLoadFailureMessage('boom', 'cpu'), /complete \.litertlm bundle/)
   assert.match(litertLmLoadFailureMessage('boom', 'cpu'), /— boom\./)
 })
@@ -198,6 +198,55 @@ test('litertLmServeBlocker: reports a native library that will not load, which a
 
 test('litertLmServeBlocker: a future version without _get_lib degrades to the plain import, not a false failure', { skip: !HAS_PYTHON }, async (t) => {
   assert.equal(await blockerWithFfi(t, '# no _get_lib here\n'), null)
+})
+
+// ── the cached serve preflight (PR #271 review: the probe spawns a Python process and dlopens
+// the native library on EVERY load/auto-resume — noticeable on a phone — so it is cached per
+// interpreter + installed-package mtime and only re-run after the environment changes) ──
+
+test('litertLmEnvFingerprint: stable for an unchanged venv, invalidated by a reinstall', (t: TestContext) => {
+  const env = tmpDir('turbollm-litert-fp-')
+  t.after(() => rmSync(env, { recursive: true, force: true }))
+  const py = join(env, 'bin', 'python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, '')
+  const pkg = join(env, 'lib', 'python3.12', 'site-packages', 'litert_lm')
+  mkdirSync(pkg, { recursive: true })
+
+  const before = litertLmEnvFingerprint(py)
+  assert.ok(before, 'a real path yields a fingerprint')
+  assert.equal(litertLmEnvFingerprint(py), before, 'unchanged environment → the same fingerprint')
+
+  // A reinstall rewrites the package dir (pip replaces it wholesale) → new fingerprint.
+  const later = new Date(Date.now() + 2000)
+  utimesSync(pkg, later, later)
+  assert.notEqual(litertLmEnvFingerprint(py), before, 'a touched package dir must invalidate the cache key')
+
+  assert.equal(litertLmEnvFingerprint(join(env, 'bin', 'no-such-python')), null, 'a missing interpreter cannot be fingerprinted')
+})
+
+test('litertLmServeBlockerCached: one probe per environment, re-probed after the environment changes', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-cache-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // A failing stand-in interpreter that records each run — the probe classifies the failure
+  // (non-null blocker), which is exactly the slow path worth caching.
+  const runs = join(dir, 'runs')
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`)
+  chmodSync(py, 0o755)
+
+  const first = await litertLmServeBlockerCached(py)
+  const second = await litertLmServeBlockerCached(py)
+  assert.ok(first, 'the failing interpreter must yield a blocker message')
+  assert.equal(second, first, 'a cached answer is the same answer')
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run', 'the probe must run exactly once for an unchanged environment')
+
+  // Touching the interpreter changes the fingerprint → the probe re-runs.
+  const later = new Date(Date.now() + 2000)
+  utimesSync(py, later, later)
+  await litertLmServeBlockerCached(py)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'a changed environment must re-probe')
 })
 
 test('litertLmPrefillStats: prompt tokens over time-to-first-token, rounded to one decimal', () => {

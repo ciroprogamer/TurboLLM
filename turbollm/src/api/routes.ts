@@ -989,8 +989,6 @@ export function registerApi(app: Hono, d: Deps): void {
     { const busy = engineWorkBusy(d); if (busy) return err(c, 409, 'engine_already_running', busy) }
     const root = join(d.store.dir(), 'engines')
     const upgrade = c.req.query('update') === '1'
-    // Only a POSITIVE "already latest" short-circuits; any check failure (offline, engine not
-    // registered) falls through to the old re-provision path, which surfaces its own error.
     // Prefers the daemon's UpdateChecker — it shares the injectable fetcher the /engines/updates
     // route uses, keeps the honest-cache semantics (a cached real answer survives an offline
     // re-check), and lets tests stub the upstream.
@@ -1002,7 +1000,14 @@ export function registerApi(app: Hono, d: Deps): void {
             : computeUpdateStatus(registered, undefined, AbortSignal.timeout(15_000))
           ).catch(() => null)
         : null
-      if (status && status.latest !== null && !status.hasUpdate) {
+      // Only a POSITIVE "already latest" short-circuits, and only when the versions were
+      // actually COMPARABLE: update.ts answers `hasUpdate: false, comparable: false` when the
+      // installed version can't be ordered against PyPI's latest (an odd or unparsable
+      // version string) — answering `alreadyLatest` there would tell the user they're
+      // current while quietly refusing the upgrade. Any check failure (offline, engine not
+      // registered) still falls through to the old re-provision path, which surfaces its
+      // own error.
+      if (status && status.latest !== null && status.comparable && !status.hasUpdate) {
         return c.json({ accepted: false, alreadyLatest: true, version: status.latest, engine: 'litert-lm' })
       }
     }

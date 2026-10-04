@@ -8,6 +8,7 @@ import { test, type TestContext } from 'node:test'
 import {
   androidWheelAbi,
   classifyLitertLmBlocker,
+  isLitertLmProbeInconclusive,
   litertLmConfigPath,
   litertLmEnvFingerprint,
   litertLmLoadFailureMessage,
@@ -247,6 +248,51 @@ test('litertLmServeBlockerCached: one probe per environment, re-probed after the
   utimesSync(py, later, later)
   await litertLmServeBlockerCached(py)
   assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'a changed environment must re-probe')
+})
+
+// ── a probe that times out answered nothing (PR #271 re-review): execFile's timeout SIGTERMs the
+// child, which litertLmServeBlocker used to classify into a blocker message — and the cache kept
+// it, so one slow probe on a busy phone became "native runtime could not load" for every later
+// load until the daemon restarted or the engine was reinstalled ──
+
+test('isLitertLmProbeInconclusive: kills and timeouts answered nothing; a real exit did', () => {
+  assert.equal(isLitertLmProbeInconclusive({ killed: true, signal: 'SIGTERM', code: null }), true, 'execFile timeout kill')
+  assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: 'SIGKILL', code: null }), true, 'killed by a signal')
+  assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: null, code: 'ETIMEDOUT' }), true, 'spawn ETIMEDOUT')
+  assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: null, code: 1 }), false, 'a non-zero exit is a real verdict')
+  assert.equal(isLitertLmProbeInconclusive(new Error('command not found')), false)
+})
+
+test('litertLmServeBlockerCached: a timed-out probe is answered for that load but never cached', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-slowprobe-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // A stand-in interpreter that records each run, then outlives the injected probe budget
+  // (1 s instead of the 60 s production one). `exec sleep` so the killed process IS sleep — no
+  // orphan shell left waiting on it.
+  const runs = join(dir, 'runs')
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexec sleep 30\n`)
+  chmodSync(py, 0o755)
+
+  const first = await litertLmServeBlockerCached(py, undefined, 1_000)
+  assert.match(first ?? '', /did not finish/, 'the honest no-answer message, not "could not load"')
+  assert.doesNotMatch(first ?? '', /could not load/, 'a timeout must not be reported as a broken runtime')
+  const second = await litertLmServeBlockerCached(py, undefined, 1_000)
+  assert.match(second ?? '', /did not finish/)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the timed-out probe must be re-run, not served from the cache')
+})
+
+test('litertLmServeBlocker: a timed-out probe reports the timeout, not a broken native runtime', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-slowprobe-plain-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, '#!/bin/sh\nexec sleep 30\n')
+  chmodSync(py, 0o755)
+  const msg = await litertLmServeBlocker(py, undefined, 1_000)
+  assert.match(msg ?? '', /did not finish/)
+  assert.doesNotMatch(msg ?? '', /could not load/)
 })
 
 test('litertLmPrefillStats: prompt tokens over time-to-first-token, rounded to one decimal', () => {

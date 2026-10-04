@@ -235,15 +235,56 @@ const NATIVE_LOAD_PROBE = [
   'load() if callable(load) else None',
 ].join('\n')
 
-/** Preflight: can the LiteRT-LM runtime actually load here? Returns a clear message when blocked, or null when OK. */
-export async function litertLmServeBlocker(python: string, signal?: AbortSignal): Promise<string | null> {
+/** The serve probe's wall-clock budget: 60 s in production — a venv's first import can be slow on a
+ *  phone — and injectably shorter in tests so the timeout path can be exercised without a
+ *  minute-long test. */
+export const LITERT_LM_PROBE_TIMEOUT_MS = 60_000
+
+/** Why a failed probe answered nothing about the environment: execFile's `timeout` SIGTERMs the
+ *  child (`killed` set), any other kill leaves `signal` set, and a killed spawn can surface as
+ *  ETIMEDOUT. Unlike a loader error, a kill is not a property of the venv — a busy phone can make
+ *  the very probe that times out now pass a minute later — so it must not be treated as a settled
+ *  verdict (PR #271 review). A plain non-zero exit is conclusive: that is the loader error the
+ *  probe exists to catch. */
+export function isLitertLmProbeInconclusive(e: unknown): boolean {
+  const err = e as { killed?: boolean; signal?: unknown; code?: unknown }
+  return Boolean(err?.killed || err?.signal || err?.code === 'ETIMEDOUT')
+}
+
+/** The probe's verdict: `blocker` is the user-facing message (null = the runtime loads), and
+ *  `conclusive` says whether the environment was actually measured. An inconclusive probe
+ *  (killed / timed out) still yields a best-effort blocker for THIS load, but the cache must not
+ *  keep it. */
+interface ServeProbeResult {
+  blocker: string | null
+  conclusive: boolean
+}
+
+async function runServeProbe(python: string, timeoutMs: number, signal?: AbortSignal): Promise<ServeProbeResult> {
   try {
-    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: 60_000, signal })
-    return null
+    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: timeoutMs, signal })
+    return { blocker: null, conclusive: true }
   } catch (e) {
     if ((e as Error)?.name === 'AbortError') throw e
-    return classifyLitertLmBlocker(process.platform, process.arch, (e as { stderr?: string })?.stderr || e)
+    if (isLitertLmProbeInconclusive(e)) {
+      return {
+        blocker:
+          `LiteRT-LM's native-runtime check did not finish — the machine was too busy to answer within ` +
+          `${Math.max(1, Math.round(timeoutMs / 1000))} s. Nothing is known about the runtime; try loading again.`,
+        conclusive: false,
+      }
+    }
+    return { blocker: classifyLitertLmBlocker(process.platform, process.arch, (e as { stderr?: string })?.stderr || e), conclusive: true }
   }
+}
+
+/** Preflight: can the LiteRT-LM runtime actually load here? Returns a clear message when blocked, or null when OK. */
+export async function litertLmServeBlocker(
+  python: string,
+  signal?: AbortSignal,
+  timeoutMs: number = LITERT_LM_PROBE_TIMEOUT_MS,
+): Promise<string | null> {
+  return (await runServeProbe(python, timeoutMs, signal)).blocker
 }
 
 /** Why this model path cannot be sent to `litert-lm serve`, or null. The server splits the request's `model` on commas
@@ -295,20 +336,31 @@ const serveBlockerCache = new Map<string, Promise<string | null>>()
  *  litertLmEnvFingerprint for why the probe is worth caching). Install-time callers
  *  (ensureLitertLmAndroidEnv) use the plain uncached litertLmServeBlocker on purpose: they
  *  have just written the environment and must see what they built. */
-export function litertLmServeBlockerCached(python: string, signal?: AbortSignal): Promise<string | null> {
+export function litertLmServeBlockerCached(
+  python: string,
+  signal?: AbortSignal,
+  timeoutMs: number = LITERT_LM_PROBE_TIMEOUT_MS,
+): Promise<string | null> {
   const key = litertLmEnvFingerprint(python)
-  if (!key) return litertLmServeBlocker(python, signal)
+  if (!key) return litertLmServeBlocker(python, signal, timeoutMs)
   const hit = serveBlockerCache.get(key)
   if (hit) return hit
-  const probe = litertLmServeBlocker(python, signal)
-  serveBlockerCache.set(key, probe)
-  // A probe that rejects (litertLmServeBlocker re-throws an abort; a spawn failure rejects)
-  // answered nothing — drop it so a later load re-runs the probe instead of a cached
-  // rejection. Settled answers (null = OK, or a blocker message) stay cached.
-  probe.catch(() => {
-    if (serveBlockerCache.get(key) === probe) serveBlockerCache.delete(key)
+  const answer = runServeProbe(python, timeoutMs, signal).then((r) => {
+    // An inconclusive probe (killed / timed out) answered nothing about the environment — one
+    // slow probe on a busy phone must not become "native runtime could not load" for every later
+    // load (PR #271 review). THIS load keeps the best-effort blocker, but the entry is dropped so
+    // the next load re-runs the probe. Only a measured verdict — null (OK) or a loader error —
+    // stays cached.
+    if (!r.conclusive && serveBlockerCache.get(key) === answer) serveBlockerCache.delete(key)
+    return r.blocker
   })
-  return probe
+  serveBlockerCache.set(key, answer)
+  // A rejection (runServeProbe re-throws an abort; a spawn failure rejects) also answered
+  // nothing — drop it so a later load re-runs the probe instead of a cached rejection.
+  answer.catch(() => {
+    if (serveBlockerCache.get(key) === answer) serveBlockerCache.delete(key)
+  })
+  return answer
 }
 
 /** The settings TurboLLM drives through LiteRT-LM's `--config` file. Every key is one the 0.17 schema accepts. */

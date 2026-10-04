@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter as pathDelimiter, join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { ConfigStore, type Engine } from '../config/config'
 import { engineCommand, pyEngineEnv, Manager, type StartOpts } from './manager'
@@ -92,7 +92,13 @@ test('a failed warm-up keeps its model_load_failed diagnosis through the exit ha
   const fakeRoot = tmpDir('turbollm-litert-fakepkgs-')
   const dataDir = tmpDir('turbollm-litert-warmup-')
   const prevPyPath = process.env.PYTHONPATH
-  t.after(() => {
+  let manager: Manager | undefined
+  t.after(async () => {
+    // Stop the Manager FIRST, even when an assertion below fails: if waitForState times out
+    // with the state still 'starting', the fake `serve_forever` child keeps running after the
+    // test (PR #271 review). stopAndWait is safe in any state — it only waits when something is
+    // still running — and force kills outright instead of the graceful TERM path.
+    await manager?.stopAndWait({ force: true })
     if (prevPyPath === undefined) delete process.env.PYTHONPATH
     else process.env.PYTHONPATH = prevPyPath
     rmSync(fakeRoot, { recursive: true, force: true })
@@ -104,10 +110,12 @@ test('a failed warm-up keeps its model_load_failed diagnosis through the exit ha
   mkdirSync(join(fakeRoot, 'litert_lm_cli'), { recursive: true })
   writeFileSync(join(fakeRoot, 'litert_lm_cli', '__init__.py'), '')
   writeFileSync(join(fakeRoot, 'litert_lm_cli', 'main.py'), FAKE_SERVE_PY)
-  process.env.PYTHONPATH = fakeRoot + (prevPyPath ? `:${prevPyPath}` : '')
+  // pathDelimiter, not ':': the PYTHONPATH separator is ';' on Windows, and a ':' join there
+  // would hand the child one invalid merged entry (PR #271 review).
+  process.env.PYTHONPATH = prevPyPath ? [fakeRoot, prevPyPath].join(pathDelimiter) : fakeRoot
 
   const store = ConfigStore.load(join(dataDir, 'config.json'))
-  const manager = new Manager(store)
+  manager = new Manager(store)
   await manager.start({
     engine: {
       id: 'lrt-warm', name: 'LiteRT-LM (fake)', kind: 'litert-lm', binPath: 'python3',

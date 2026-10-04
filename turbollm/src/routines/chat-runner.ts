@@ -184,7 +184,12 @@ async function runChatRoundLoop(d: Deps, run: RoutineRun, agent: CustomChatAgent
     // key would go out as the `model` field and mlx_vlm.server would 400 with a clear "Failed to
     // load model" error rather than silently misbehaving — acceptable as a last-resort guard.
     const reqBody: Record<string, unknown> = { model: engineModelAlias(engineKind, d.manager.currentOpts()?.modelPath) ?? ms.model.key, messages: state.messages, stream: false }
-    if (baseToolDefs.length) reqBody.tools = baseToolDefs
+    // Same gate as chat-routes / ext/generation (PR #271 review): litert-lm serve has nothing
+    // showing it honors a `tools` array, so a routine whose agent allows tools runs its turns
+    // without them — like a plain chat on this engine already does — instead of a request that
+    // looks equipped but can never call them. vLLM/SGLang were already ungated on this path
+    // before LiteRT-LM; that stays as-is.
+    if (baseToolDefs.length && engineKind !== 'litert-lm') reqBody.tools = baseToolDefs
     const cappedMax = clampMaxTokens(undefined, maxLimit)
     if (cappedMax != null) reqBody.max_tokens = cappedMax
     applyEngineTokenLimit(engineKind, reqBody)

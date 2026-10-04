@@ -268,7 +268,10 @@ export async function litertLmServeBlocker(
       return `LiteRT-LM's native-runtime check did not finish — the machine was too busy to answer within ` +
         `${Math.max(1, Math.round(timeoutMs / 1000))} s. Nothing is known about the runtime; try loading again.`
     }
-    return classifyLitertLmBlocker(process.platform, process.arch, (e as { stderr?: string })?.stderr || e)
+    // A crash leaves stderr empty, and Node's message ends with the probe's own source — name the signal instead.
+    const { signal: crash, stderr } = e as { signal?: string; stderr?: string }
+    const detail = crash ? `the native runtime crashed (${crash})` : stderr || e
+    return classifyLitertLmBlocker(process.platform, process.arch, detail)
   }
 }
 

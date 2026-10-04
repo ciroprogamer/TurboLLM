@@ -126,7 +126,7 @@ export function resolveChatUpstream(d: Deps, requestedModel?: string): ChatUpstr
  *  `body` itself for a remote turn or a non-object body. Done here, at the one outbound call, so the
  *  main turn, the auto-title, memory extraction and compaction can't drift apart (v1.14.5 review). */
 function shapeForLocalEngine(upstream: ChatUpstream, body: unknown): unknown {
-  if (upstream.remote || !upstream.engineKind || !body || typeof body !== 'object') return body
+  if (upstream.remote || upstream.engineKind !== 'litert-lm' || !body || typeof body !== 'object' || Array.isArray(body)) return body
   return applyEngineTokenLimit(upstream.engineKind, { ...(body as Record<string, unknown>) })
 }
 

@@ -316,6 +316,21 @@ test('litertLmServeBlockerCached: a timed-out probe is answered for that load bu
   assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the timed-out probe must be re-run, not served from the cache')
 })
 
+// A native crash leaves stderr empty, and Node's error message ends with the probe's own source, so the
+// "detail" used to be a line of Python like `load() if callable(load) else None` (v1.14.5 fix-delta review).
+test('litertLmServeBlocker: a native crash names the signal, not a line of the probe', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-crash-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, '#!/bin/sh\nkill -ILL $$\n')
+  chmodSync(py, 0o755)
+  const msg = await litertLmServeBlocker(py)
+  assert.match(msg ?? '', /could not load/)
+  assert.match(msg ?? '', /crashed \(SIGILL\)/)
+  assert.doesNotMatch(msg ?? '', /callable/)
+})
+
 test('litertLmServeBlocker: a timed-out probe reports the timeout, not a broken native runtime', { skip: process.platform === 'win32' }, async (t: TestContext) => {
   const dir = tmpDir('turbollm-litert-slowprobe-plain-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))

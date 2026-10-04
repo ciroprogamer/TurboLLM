@@ -11,7 +11,11 @@ import { registerApi } from './routes'
 import { UpdateChecker } from '../engines/update'
 import type { Deps } from '../deps'
 
-function appWithChecker(fetcher: (src: { source: string; ref: string }) => Promise<string>, installedVersion = '0.17.1') {
+function appWithChecker(
+  fetcher: (src: { source: string; ref: string }) => Promise<string>,
+  installedVersion = '0.17.1',
+  runningKind: string | null = 'litert-lm',
+) {
   const cfg: Record<string, unknown> = {
     daemon: { lanBind: false, requireApiKey: false, port: 6996, machineId: 'm', machineName: 'test' },
     apiKeys: [],
@@ -37,6 +41,7 @@ function appWithChecker(fetcher: (src: { source: string; ref: string }) => Promi
     manager: {
       status: () => ({ state: 'stopped', err: null, port: 0, pid: 0, model: null }),
       stopAndWait: async () => { provisionCalls.push('stop') },
+      currentOpts: () => (runningKind ? { engine: { kind: runningKind } } : undefined),
     },
     modelRouter: { loadedModelKeys: () => new Set<string>() },
     db: { lastGenTpsByModel: () => new Map<string, number>() },
@@ -117,4 +122,14 @@ test('an update stops a loaded LiteRT-LM model before touching its venv', async 
   const res = await app.request('/api/v1/engines/litert-lm?update=1', { method: 'POST' })
   assert.equal(res.status, 202)
   assert.deepEqual(provisionCalls.slice(0, 2), ['start:litert-lm', 'stop'])
+})
+
+test('an update leaves a running model of ANOTHER engine alone, even when LiteRT-LM is the active engine', async () => {
+  // Installing an engine activates it without stopping what is loaded, so "active" and "running" can
+  // differ (v1.14.5 fix-delta review): a llama.cpp model the user still has loaded must not be unloaded
+  // by a LiteRT-LM update, because it never held LiteRT-LM's library.
+  const { app, provisionCalls } = appWithChecker(async () => '0.18.0', '0.17.1', 'llama-server')
+  const res = await app.request('/api/v1/engines/litert-lm?update=1', { method: 'POST' })
+  assert.equal(res.status, 202)
+  assert.equal(provisionCalls.includes('stop'), false)
 })

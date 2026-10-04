@@ -52,7 +52,7 @@ import type { ChatStore } from '../chat/store/chat-store.js'
 import type { Chat, ChatMessage, Scope } from '../chat/store/types.js'
 import type { RunDeps } from './routes.runs.js'
 import { withCurrentDate } from '../chat/chat-compaction.js'
-import { engineModelAlias } from '../engines/compat.js'
+import { applyEngineTokenLimit, engineModelAlias } from '../engines/compat.js'
 import { clampMaxTokens } from '../config/config.js'
 import { executeToolCallWithApproval } from '../tools/execute-with-approval.js'
 import { initParseState, feedChunk, flushState, type ParseState } from '../chat/parser.js'
@@ -272,8 +272,10 @@ async function runGenerationLoop(d: Deps, ctx: GenerationCtx, emit: EmitSink, si
 
   // vLLM is strict about a `tools` array defaulting tool_choice to "auto" unless launched with
   // --enable-auto-tool-choice (chat-routes.ts's own BUG note) — same engine-kind gate here.
+  // LiteRT-LM is withheld too, until its server is verified to honor `tools` (PR #271 review).
   const toolDefs = d.tools ? await d.tools.buildToolDefinitions() : []
-  const toolsSupported = engineKind !== 'vllm' && engineKind !== 'sglang' && toolDefs.length > 0
+  const toolsSupported =
+    engineKind !== 'vllm' && engineKind !== 'sglang' && engineKind !== 'litert-lm' && toolDefs.length > 0
 
   const messages: WireMessage[] = ctx.engineMessages.map((m) => ({ role: m.role, content: m.content }))
 
@@ -294,6 +296,7 @@ async function runGenerationLoop(d: Deps, ctx: GenerationCtx, emit: EmitSink, si
     const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
     if (cappedMax != null) reqBody.max_tokens = cappedMax
     else delete reqBody.max_tokens
+    applyEngineTokenLimit(engineKind, reqBody)
     if (toolsSupported) reqBody.tools = toolDefs
 
     let res: Response

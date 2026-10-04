@@ -27,6 +27,8 @@ import { buildBenchResultConfig } from '../telemetry/events/perf'
 import { shouldEmitBenchResult, benchRateLimitKey, MIN_GEN_TOKENS_FOR_BENCH } from '../telemetry/runtime/bench-rate-limit'
 import { resolveProfile, type LoadProfile } from '../models/profile'
 import type { ModelInfo } from '../engines/manager'
+import { applyEngineTokenLimit } from '../engines/compat'
+import { litertLmPrefillStats } from '../engines/litert-lm'
 import { getModelProfile } from '../config/config'
 import { getSysInfo } from '../sysinfo/sysinfo'
 import { noteLocalActivity } from '../link/host-idle'
@@ -1061,6 +1063,7 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
       if (cappedMax != null) reqBody.max_tokens = cappedMax
       else delete reqBody.max_tokens
+      applyEngineTokenLimit(engineKind, reqBody)
       // GitHub #52: thinkingBudget (this turn) and preserveThinking (past turns) are
       // independent and can both be relevant at once, so merge rather than overwrite.
       // thinking_budget_tokens (not the unrecognized `reasoning_budget`) is the field the
@@ -1098,7 +1101,12 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       // depends on the loaded model's chat template matching one of mlx-vlm's built-in
       // tool parsers (see the MLX-VLM catalog note) — not a crash risk, just a
       // per-architecture no-op some of the time.
-      const toolsSupported = engineKind !== 'vllm' && engineKind !== 'sglang' && toolDefs.length > 0
+      // LiteRT-LM is withheld until its server is verified to honor `tools` (PR #271
+      // review): nothing in its CLI/docs shows tool-call support, and silently sending
+      // the array risks agent/Code turns that look like they have tools but never call
+      // them. Harmless either way: the model just answers without tools.
+      const toolsSupported =
+        engineKind !== 'vllm' && engineKind !== 'sglang' && engineKind !== 'litert-lm' && toolDefs.length > 0
       if (toolsSupported) reqBody.tools = toolDefs
       // Force web_search on the first two iterations when the conversation has a
       // force_web_search policy (e.g. Research persona). This guarantees at least
@@ -1422,6 +1430,7 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
       if (cappedMax != null) reqBody.max_tokens = cappedMax
       else delete reqBody.max_tokens
+      applyEngineTokenLimit(engineKind, reqBody)
       // GitHub #52: thinkingBudget (this turn) and preserveThinking (past turns) are
       // independent and can both be relevant at once, so merge rather than overwrite.
       // thinking_budget_tokens (not the unrecognized `reasoning_budget`) is the field the
@@ -1613,6 +1622,15 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
     stats.genMs        = totalMs - ttftMs
     stats.tps          = stats.genMs > 0 ? Math.round((stats.genTokens / stats.genMs) * 1000 * 10) / 10 : 0
     stats.cachedTokens = cachedExplicit ?? 0
+    // LiteRT-LM sends token counts but no timings, so derive prefill from TTFT. Only for a single-round turn: with tool
+    // calls, `ttftMs` spans earlier rounds too and would understate the speed.
+    if (engineKind === 'litert-lm' && allToolCalls.length === 0) {
+      const pf = litertLmPrefillStats(finalUsage.prompt_tokens, ttftMs)
+      if (pf) {
+        stats.promptMs = pf.promptMs
+        stats.promptTps = pf.promptTps
+      }
+    }
   }
 
   // F-022: run the heuristic referee on Research persona replies before persisting.

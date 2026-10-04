@@ -72,6 +72,36 @@ test('runChatRoutine sends manager.currentOpts().modelPath as the request model 
   } finally { fetchStub.restore() }
 })
 
+// PR #271 re-review: the tools gating from the first review covered chat-routes and
+// ext/generation only — the routines path still sent `tools` to litert-lm, so an agent with
+// tools allowed (AGENT has run_code, which buildToolDefinitions() offers unconditionally)
+// looked equipped but could never call anything. This is the call-site proof the gate reaches
+// this path too: the SAME agent that gets `tools` on llama.cpp gets none on litert-lm.
+test('runChatRoutine withholds tools from litert-lm — a tool-equipped agent still runs, without the array', async () => {
+  const { d, db } = fakeDeps({ engineKind: 'litert-lm' })
+  const r = routine(db)
+  const run = db.createRoutineRun({ routineId: r.id, configSnapshot: JSON.stringify(r) })
+  const fetchStub = stubFetch([{ choices: [{ message: { content: 'All PRs are green.' } }] }])
+  try {
+    const outcome = await runChatRoutine(d, r, run, new AbortController().signal)
+    assert.equal(outcome.status, 'ok', 'the turn itself must succeed — tools are withheld, not fatal')
+    assert.equal(fetchStub.calls[0].tools, undefined, 'litert-lm serve has no verified tools support')
+  } finally { fetchStub.restore() }
+})
+
+// The same agent on an engine that does take tools: proves the litert-lm test above withholds
+// because of the engine kind, not because the registry or agent came up empty.
+test('runChatRoutine still sends tools on llama-server for the same agent', async () => {
+  const { d, db } = fakeDeps({ engineKind: 'llama-server' })
+  const r = routine(db)
+  const run = db.createRoutineRun({ routineId: r.id, configSnapshot: JSON.stringify(r) })
+  const fetchStub = stubFetch([{ choices: [{ message: { content: 'All PRs are green.' } }] }])
+  try {
+    await runChatRoutine(d, r, run, new AbortController().signal)
+    assert.ok(Array.isArray(fetchStub.calls[0].tools) && fetchStub.calls[0].tools.length > 0, 'run_code must be offered on llama-server')
+  } finally { fetchStub.restore() }
+})
+
 test('a final answer with no tool calls records status ok', async () => {
   const { d, db } = fakeDeps()
   const r = routine(db)

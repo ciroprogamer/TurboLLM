@@ -29,6 +29,7 @@ function copyWithSelection(text: string): boolean {
   try {
     field.focus()
     field.select()
+    field.setSelectionRange(0, text.length)
     return document.execCommand('copy')
   } catch {
     return false

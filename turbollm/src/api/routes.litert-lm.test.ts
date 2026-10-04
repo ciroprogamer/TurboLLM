@@ -34,12 +34,16 @@ function appWithChecker(fetcher: (src: { source: string; ref: string }) => Promi
     version: 'test',
     store: { snapshot: () => cfg, update: (fn: (c: never) => void) => fn(cfg as never), dir: () => '/tmp/turbollm-litert-route' },
     scanner: { list: () => ({ models: [], scanning: false, lastScanAt: '' }) },
-    manager: { status: () => ({ state: 'stopped', err: null, port: 0, pid: 0, model: null }) },
+    manager: {
+      status: () => ({ state: 'stopped', err: null, port: 0, pid: 0, model: null }),
+      stopAndWait: async () => { provisionCalls.push('stop') },
+    },
     modelRouter: { loadedModelKeys: () => new Set<string>() },
     db: { lastGenTpsByModel: () => new Map<string, number>() },
     registry: {
       engines,
       list: () => ({ engines, activeEngineId: 'litert-1' }),
+      active: () => engines[0],
       addLitertLm: (name: string) => ({ id: 'litert-2', name, activate: () => {} }),
       activate: () => {},
     },
@@ -103,4 +107,14 @@ test('a plain install (no ?update=1) never consults the upstream and always prov
   assert.equal(res.status, 202)
   assert.equal(((await res.json()) as { accepted: boolean }).accepted, true)
   assert.ok(provisionCalls.includes('start:litert-lm'))
+})
+
+test('an update stops a loaded LiteRT-LM model before touching its venv', async () => {
+  // v1.14.5 review: on Windows the loaded native library is file-locked, so upgrading the venv under a
+  // running model fails with os error 32 and can leave it half-upgraded. applyPipUpdate already
+  // stopped first; this route did not.
+  const { app, provisionCalls } = appWithChecker(async () => '0.18.0')
+  const res = await app.request('/api/v1/engines/litert-lm?update=1', { method: 'POST' })
+  assert.equal(res.status, 202)
+  assert.deepEqual(provisionCalls.slice(0, 2), ['start:litert-lm', 'stop'])
 })

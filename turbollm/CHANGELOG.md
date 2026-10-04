@@ -42,6 +42,12 @@ _Nothing yet._
   engine yet. Prefill speed is estimated from prompt tokens and time to first token, because LiteRT-LM reports no
   timings. Contributed by @ciroprogamer (#271).
 
+### Fixed
+
+- **A model that fails to load on MLX, MLX-VLM, Rapid-MLX, vLLM or SGLang now keeps its real error.** TurboLLM read the
+  load error from the engine's log, then stopped the engine, and the stop overwrote it with "The engine process
+  exited unexpectedly." The load error is now what you see.
+
 ### Discord
 
 - **New engine: LiteRT-LM (experimental).** Google's on-device runtime, for `.litertlm` models like Gemma and Qwen3.

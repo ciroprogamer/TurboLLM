@@ -50,29 +50,6 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   a clear message (its OS forbids running downloaded binaries). Corrupt, encrypted, or oversized archives
   fail cleanly and never leave a half-installed build behind.
 
-### Fixed
-
-- **A LiteRT-LM model-load failure now keeps its diagnosis** instead of being overwritten by the generic
-  "The engine process exited unexpectedly." The one-token warm-up (or a Python engine's load-failure traceback)
-  records an actionable message — a bad `.litertlm` bundle, an unusable GPU — and kills the process; the exit
-  handler used to replace that message with the aftermath of its own kill. The readiness-timeout diagnosis was
-  already protected; the load-failure one now is too. The GPU hint in that message also names the control the
-  LiteRT-LM panel actually offers ("switch the Backend setting to CPU") instead of llama.cpp's "set GPU layers
-  to 0", a slider that is not rendered for this engine.
-- **"Check for update" is honest for LiteRT-LM, and unchanged for every other engine.** For LiteRT-LM the
-  button does a live status re-check and never lights the "Downloading…" banner for a no-op; a version that
-  can't be compared against PyPI's latest no longer answers "already on the latest release" (it falls through
-  to the real upgrade), and the rate-limit notice no longer points PyPI users at the GitHub token setting.
-  Other engines' cards keep the update action they have always had.
-- **The max-response-tokens cap can no longer be bypassed on LiteRT-LM** by sending an explicit
-  `max_completion_tokens` alongside a clamped `max_tokens`: both name the same cap, so the smaller of the two
-  is the one sent.
-- **LiteRT-LM loads faster after the first:** the native-runtime preflight that runs before every load and
-  auto-resume (it spawns a Python process and loads the native library) is now cached per venv and re-run only
-  after the engine is reinstalled, rather than on every load.
-- **Tools are withheld from LiteRT-LM** until its server is verified to honor a `tools` array (agent and Code
-  turns run without tools rather than silently never calling them), matching the existing vLLM/SGLang gating.
-
 ## [1.14.3] - 2026-09-30
 
 ### Added

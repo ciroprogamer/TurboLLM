@@ -69,7 +69,7 @@ test('a Laya model in the primary would get the same refusal: one rule for every
 test('a chat model loaded as the primary resolves exactly as before', () => {
   assert.deepEqual(resolveChatUpstream(chatDeps({ state: 'running', modelKey: GGUF_KEY })), {
     ok: true,
-    upstream: { modelField: GGUF_KEY, modelName: 'Qwen3 8B', ctxMax: 8192, target: ENGINE },
+    upstream: { modelField: GGUF_KEY, modelName: 'Qwen3 8B', ctxMax: 8192, target: ENGINE, engineKind: 'llama.cpp' },
   })
 })
 

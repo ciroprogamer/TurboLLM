@@ -27,7 +27,6 @@ import { buildBenchResultConfig } from '../telemetry/events/perf'
 import { shouldEmitBenchResult, benchRateLimitKey, MIN_GEN_TOKENS_FOR_BENCH } from '../telemetry/runtime/bench-rate-limit'
 import { resolveProfile, type LoadProfile } from '../models/profile'
 import type { ModelInfo } from '../engines/manager'
-import { applyEngineTokenLimit } from '../engines/compat'
 import { litertLmPrefillStats } from '../engines/litert-lm'
 import { getModelProfile } from '../config/config'
 import { getSysInfo } from '../sysinfo/sysinfo'
@@ -1063,7 +1062,6 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
       if (cappedMax != null) reqBody.max_tokens = cappedMax
       else delete reqBody.max_tokens
-      applyEngineTokenLimit(engineKind, reqBody)
       // GitHub #52: thinkingBudget (this turn) and preserveThinking (past turns) are
       // independent and can both be relevant at once, so merge rather than overwrite.
       // thinking_budget_tokens (not the unrecognized `reasoning_budget`) is the field the
@@ -1430,7 +1428,6 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, maxLimit)
       if (cappedMax != null) reqBody.max_tokens = cappedMax
       else delete reqBody.max_tokens
-      applyEngineTokenLimit(engineKind, reqBody)
       // GitHub #52: thinkingBudget (this turn) and preserveThinking (past turns) are
       // independent and can both be relevant at once, so merge rather than overwrite.
       // thinking_budget_tokens (not the unrecognized `reasoning_budget`) is the field the
@@ -1623,8 +1620,9 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
     stats.tps          = stats.genMs > 0 ? Math.round((stats.genTokens / stats.genMs) * 1000 * 10) / 10 : 0
     stats.cachedTokens = cachedExplicit ?? 0
     // LiteRT-LM sends token counts but no timings, so derive prefill from TTFT. Only for a single-round turn: with tool
-    // calls, `ttftMs` spans earlier rounds too and would understate the speed.
-    if (engineKind === 'litert-lm' && allToolCalls.length === 0) {
+    // calls, `ttftMs` spans earlier rounds too and would understate the speed. Only for the LOCAL engine: a Turbo Link
+    // host's engine is not this machine's, and its own stats stand.
+    if (localAccounting && engineKind === 'litert-lm' && allToolCalls.length === 0) {
       const pf = litertLmPrefillStats(finalUsage.prompt_tokens, ttftMs)
       if (pf) {
         stats.promptMs = pf.promptMs

@@ -25,21 +25,39 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 _Nothing yet._
 
+## [1.14.5] - 2026-10-04
+
+### Added
+
+- **LiteRT-LM engine (experimental).** Google's on-device LLM runtime ([LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM))
+  is now an engine you can install from Engines. The install is a small pip environment with no PyTorch or CUDA.
+  It runs single-file `.litertlm` models (Gemma, Qwen3, Phi-4-mini, …), which the library now finds on disk, on the CPU or the GPU.
+  Builds exist for Windows x64, Linux x64/arm64, macOS on Apple Silicon and Android (arm64 / x86_64). On Android it
+  runs only when TurboLLM itself is started from Termux with `pkg install python`, because the standalone Android
+  app has no Python. A model's settings page has a Backend choice (Auto / CPU / GPU), plus context length, CPU threads,
+  port and custom flags. Choose GPU to force it on a device whose GPU can't be detected; choose CPU if a model won't
+  load on the GPU. LiteRT-LM only loads a model on its first request, so TurboLLM sends a one-token request while
+  loading, and a broken bundle or an unusable GPU shows up as a load error with the runtime's own message, not as a
+  start that never finishes. The first load of a model can take a minute or more. Chat tools aren't offered on this
+  engine yet. Prefill speed is estimated from prompt tokens and time to first token, because LiteRT-LM reports no
+  timings. Contributed by @ciroprogamer (#271).
+
+### Fixed
+
+- **A model that fails to load on MLX, MLX-VLM, Rapid-MLX, vLLM or SGLang now keeps its real error.** TurboLLM read the
+  load error from the engine's log, then stopped the engine, and the stop overwrote it with "The engine process
+  exited unexpectedly." The load error is now what you see.
+
+### Discord
+
+- **New engine: LiteRT-LM (experimental).** Google's on-device runtime, for `.litertlm` models like Gemma and Qwen3.
+  A small install with no CUDA or PyTorch, on the CPU or the GPU, on Windows, Linux, Apple Silicon Macs and Android via
+  Termux. Thanks to @ciroprogamer for contributing it.
+
 ## [1.14.4] - 2026-10-04
 
 ### Added
 
-- **LiteRT-LM engine (experimental).** Google's on-device LLM runtime is now an engine kind: install it from
-  Engines (a small pip environment, no PyTorch or CUDA) and load single-file `.litertlm` bundles (Gemma, Qwen3,
-  Phi-4-mini, …) that the library now discovers. GPU layers switch between the CPU and GPU backend;
-  context and threads come from the load profile. Native builds exist for Windows x64, Linux x64/arm64, macOS
-  Apple Silicon and Android (arm64 / x86_64). On Android the engine runs only when TurboLLM is started from
-  Termux with `pkg install python`; the standalone Android app has no Python. LiteRT-LM loads a model lazily on its first request, so TurboLLM warms it up with a one-token
-  request and reports a bad bundle as a load error instead of a hung start.
-  The model's settings page offers a CPU / GPU / Auto backend choice (so a phone whose GPU can't be detected can
-  still be forced onto it), context length, CPU threads, port and custom flags. LiteRT-LM reports token counts
-  but no timings, so prefill speed is derived from prompt tokens and time to first token. The first load of a
-  model can take a minute or more.
 - **Add your own engine by uploading its .zip.** In the Add-engine flow, "Upload a .zip…" now sits beside
   "Choose folder…": pick a fork's release archive and TurboLLM searches it at any depth for `llama-server`,
   extracts the binary together with the runtime libraries it needs (`.dll` / `.dylib` / `.so` and versioned

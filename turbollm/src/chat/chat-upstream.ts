@@ -19,7 +19,7 @@
 //     apart; a second chat-shaped proxy would have been the fourth.
 //  2. **A remote turn writes nothing into local engine state.** Same rule the gateway's
 //     `localAccounting` flag enforces: this machine did not run the tokens.
-import { engineModelAlias } from '../engines/compat'
+import { applyEngineTokenLimit, engineModelAlias } from '../engines/compat'
 import { linkHeaders, proxyStream, type RemoteTarget } from '../link/link-proxy'
 import type { Deps } from '../deps'
 import { isTextClassifier } from '../models/text-classifier'
@@ -41,6 +41,9 @@ export interface ChatUpstream {
   remote?: RemoteTarget
   /** Local engine base URL. Empty for a remote turn — nothing may build a URL from it. */
   target: string
+  /** The LOCAL active engine's kind, which shapes the outbound body (applyEngineTokenLimit). Ignored
+   *  for a remote turn: the host shapes the request for its own engine. */
+  engineKind?: string
 }
 
 export type ChatUpstreamResult =
@@ -106,15 +109,25 @@ export function resolveChatUpstream(d: Deps, requestedModel?: string): ChatUpstr
   if (!target) {
     return { ok: false, status: 409, code: 'model_not_loaded', message: 'Engine not running.' }
   }
+  const engineKind = d.registry.active()?.kind ?? ''
   return {
     ok: true,
     upstream: {
-      modelField: engineModelAlias(d.registry.active()?.kind ?? '', d.manager.currentOpts()?.modelPath) ?? ms.model.key,
+      modelField: engineModelAlias(engineKind, d.manager.currentOpts()?.modelPath) ?? ms.model.key,
       modelName: ms.model.name,
       ctxMax: ms.model.ctx ?? DEFAULT_CTX,
       target,
+      engineKind,
     },
   }
+}
+
+/** A copy of `body` shaped for the local engine (LiteRT-LM reads only `max_completion_tokens`), or
+ *  `body` itself for a remote turn or a non-object body. Done here, at the one outbound call, so the
+ *  main turn, the auto-title, memory extraction and compaction can't drift apart (v1.14.5 review). */
+function shapeForLocalEngine(upstream: ChatUpstream, body: unknown): unknown {
+  if (upstream.remote || upstream.engineKind !== 'litert-lm' || !body || typeof body !== 'object' || Array.isArray(body)) return body
+  return applyEngineTokenLimit(upstream.engineKind, { ...(body as Record<string, unknown>) })
 }
 
 /** The ONE outbound chat-completions call, local engine or linked host.
@@ -143,6 +156,7 @@ export function callChatUpstream(
   fetchImpl: typeof fetch = fetch,
   d?: Deps,
 ): Promise<Response> {
+  body = shapeForLocalEngine(upstream, body)
   const payload = JSON.stringify(body)
   const call = upstream.remote
     ? (() => {

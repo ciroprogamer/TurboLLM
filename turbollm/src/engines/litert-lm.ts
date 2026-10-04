@@ -90,10 +90,13 @@ export function androidWheelAbi(arch: string): 'arm64_v8a' | 'x86_64' | null {
 
 export interface PypiFile { filename: string; url: string; digests?: { sha256?: string } }
 
-/** Pick the Android native wheel for `abi` out of a PyPI release's file list (highest API level wins when several). */
+/** Pick the Android native wheel for `abi` out of a PyPI release's file list (highest API level wins when several).
+ *  Only a wheel that can be verified and safely named qualifies: it must carry a SHA-256 digest, and its file
+ *  name (later joined into a write path) must contain no path separator. */
 export function pickAndroidWheel(files: PypiFile[], abi: string): PypiFile | null {
   const re = new RegExp(`-py3-none-android_(\\d+)_${abi}\\.whl$`)
   const found = files
+    .filter((f) => Boolean(f.digests?.sha256) && !/[\\/]/.test(f.filename))
     .map((f) => ({ f, api: Number(re.exec(f.filename)?.[1]) }))
     .filter((x) => Number.isFinite(x.api))
     .sort((a, b) => b.api - a.api)
@@ -132,13 +135,13 @@ async function installAndroidNativeWheel(py: string, root: string, version: stri
   if (!abi) throw new Error(`LiteRT-LM has no Android build for the ${process.arch} architecture.`)
   const release = await pypiJson(`${PYPI}/litert-lm-api/${version}/json`)
   const wheel = pickAndroidWheel(release.urls, abi)
-  if (!wheel) throw new Error(`litert-lm-api ${version} publishes no Android ${abi} wheel.`)
+  if (!wheel) throw new Error(`litert-lm-api ${version} publishes no verifiable Android ${abi} wheel.`)
 
   const r = await fetch(wheel.url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000) })
   if (!r.ok) throw new Error(`Could not download ${wheel.filename} (HTTP ${r.status}).`)
   const bytes = Buffer.from(await r.arrayBuffer())
-  const want = wheel.digests?.sha256
-  if (want && createHash('sha256').update(bytes).digest('hex') !== want) {
+  // pickAndroidWheel only returns a wheel that has a digest, so the check always runs.
+  if (createHash('sha256').update(bytes).digest('hex') !== wheel.digests?.sha256) {
     throw new Error(`${wheel.filename} failed its SHA-256 check — the download is corrupt, try again.`)
   }
 
@@ -240,42 +243,14 @@ const NATIVE_LOAD_PROBE = [
  *  minute-long test. */
 export const LITERT_LM_PROBE_TIMEOUT_MS = 60_000
 
-/** Why a failed probe answered nothing about the environment: execFile's `timeout` SIGTERMs the
- *  child (`killed` set), any other kill leaves `signal` set, and a killed spawn can surface as
- *  ETIMEDOUT. Unlike a loader error, a kill is not a property of the venv — a busy phone can make
- *  the very probe that times out now pass a minute later — so it must not be treated as a settled
- *  verdict (PR #271 review). A plain non-zero exit is conclusive: that is the loader error the
- *  probe exists to catch. */
+/** Whether a failed probe was cut short rather than answering: execFile's `timeout` kills the child
+ *  (`killed` set), an outside SIGTERM/SIGKILL stops it, and a killed spawn can surface as ETIMEDOUT.
+ *  A busy phone can make the very probe that times out now pass a minute later, so this gets a
+ *  "try again" message, not "could not load" (PR #271 review). A non-zero exit, or a crash signal
+ *  such as SIGSEGV/SIGILL from a native library that cannot run on this CPU, is a real answer. */
 export function isLitertLmProbeInconclusive(e: unknown): boolean {
   const err = e as { killed?: boolean; signal?: unknown; code?: unknown }
-  return Boolean(err?.killed || err?.signal || err?.code === 'ETIMEDOUT')
-}
-
-/** The probe's verdict: `blocker` is the user-facing message (null = the runtime loads), and
- *  `conclusive` says whether the environment was actually measured. An inconclusive probe
- *  (killed / timed out) still yields a best-effort blocker for THIS load, but the cache must not
- *  keep it. */
-interface ServeProbeResult {
-  blocker: string | null
-  conclusive: boolean
-}
-
-async function runServeProbe(python: string, timeoutMs: number, signal?: AbortSignal): Promise<ServeProbeResult> {
-  try {
-    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: timeoutMs, signal })
-    return { blocker: null, conclusive: true }
-  } catch (e) {
-    if ((e as Error)?.name === 'AbortError') throw e
-    if (isLitertLmProbeInconclusive(e)) {
-      return {
-        blocker:
-          `LiteRT-LM's native-runtime check did not finish — the machine was too busy to answer within ` +
-          `${Math.max(1, Math.round(timeoutMs / 1000))} s. Nothing is known about the runtime; try loading again.`,
-        conclusive: false,
-      }
-    }
-    return { blocker: classifyLitertLmBlocker(process.platform, process.arch, (e as { stderr?: string })?.stderr || e), conclusive: true }
-  }
+  return Boolean(err?.killed || err?.code === 'ETIMEDOUT' || err?.signal === 'SIGTERM' || err?.signal === 'SIGKILL')
 }
 
 /** Preflight: can the LiteRT-LM runtime actually load here? Returns a clear message when blocked, or null when OK. */
@@ -284,7 +259,20 @@ export async function litertLmServeBlocker(
   signal?: AbortSignal,
   timeoutMs: number = LITERT_LM_PROBE_TIMEOUT_MS,
 ): Promise<string | null> {
-  return (await runServeProbe(python, timeoutMs, signal)).blocker
+  try {
+    await execFileP(python, ['-c', NATIVE_LOAD_PROBE], { timeout: timeoutMs, signal })
+    return null
+  } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e
+    if (isLitertLmProbeInconclusive(e)) {
+      return `LiteRT-LM's native-runtime check did not finish — the machine was too busy to answer within ` +
+        `${Math.max(1, Math.round(timeoutMs / 1000))} s. Nothing is known about the runtime; try loading again.`
+    }
+    // A crash leaves stderr empty, and Node's message ends with the probe's own source — name the signal instead.
+    const { signal: crash, stderr } = e as { signal?: string; stderr?: string }
+    const detail = crash ? `the native runtime crashed (${crash})` : stderr || e
+    return classifyLitertLmBlocker(process.platform, process.arch, detail)
+  }
 }
 
 /** Why this model path cannot be sent to `litert-lm serve`, or null. The server splits the request's `model` on commas
@@ -327,8 +315,10 @@ export function litertLmEnvFingerprint(python: string): string | null {
   }
 }
 
-/** The in-flight/cached result of the serve preflight per fingerprint. The PROMISE is cached
- *  (concurrent loads share one probe), and an abort is neither cached nor returned — it
+/** The in-flight probe, or a PASS, per fingerprint. The PROMISE is cached so concurrent loads
+ *  share one probe. Only a pass stays: a failure is often fixed outside the venv (Defender done
+ *  scanning a fresh DLL, a runtime library installed), which no fingerprint sees, so a cached
+ *  failure would outlive the fix until the daemon restarted (v1.14.5 review). An abort
  *  propagates so the caller can treat the load as cancelled, not as pass/fail. */
 const serveBlockerCache = new Map<string, Promise<string | null>>()
 
@@ -345,21 +335,13 @@ export function litertLmServeBlockerCached(
   if (!key) return litertLmServeBlocker(python, signal, timeoutMs)
   const hit = serveBlockerCache.get(key)
   if (hit) return hit
-  const answer = runServeProbe(python, timeoutMs, signal).then((r) => {
-    // An inconclusive probe (killed / timed out) answered nothing about the environment — one
-    // slow probe on a busy phone must not become "native runtime could not load" for every later
-    // load (PR #271 review). THIS load keeps the best-effort blocker, but the entry is dropped so
-    // the next load re-runs the probe. Only a measured verdict — null (OK) or a loader error —
-    // stays cached.
-    if (!r.conclusive && serveBlockerCache.get(key) === answer) serveBlockerCache.delete(key)
-    return r.blocker
-  })
+  const answer = litertLmServeBlocker(python, signal, timeoutMs)
   serveBlockerCache.set(key, answer)
-  // A rejection (runServeProbe re-throws an abort; a spawn failure rejects) also answered
-  // nothing — drop it so a later load re-runs the probe instead of a cached rejection.
-  answer.catch(() => {
+  const forget = () => {
     if (serveBlockerCache.get(key) === answer) serveBlockerCache.delete(key)
-  })
+  }
+  // THIS load still gets the blocker; only the next one re-probes.
+  answer.then((blocker) => { if (blocker !== null) forget() }, forget)
   return answer
 }
 

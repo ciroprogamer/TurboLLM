@@ -146,7 +146,7 @@ test('androidWheelAbi maps Node arch names to the wheel platform tag', () => {
 })
 
 test('pickAndroidWheel selects the matching Android ABI and ignores desktop wheels', () => {
-  const f = (filename: string) => ({ filename, url: `https://files/${filename}` })
+  const f = (filename: string) => ({ filename, url: `https://files/${filename}`, digests: { sha256: 'ab'.repeat(32) } })
   const files = [
     f('litert_lm_api-0.17.1-py3-none-android_23_arm64_v8a.whl'),
     f('litert_lm_api-0.17.1-py3-none-android_23_x86_64.whl'),
@@ -158,8 +158,18 @@ test('pickAndroidWheel selects the matching Android ABI and ignores desktop whee
   assert.equal(pickAndroidWheel(files.slice(2), 'arm64_v8a'), null)
 })
 
+// v1.14.5 review: this is the one install path that unpacks a downloaded archive by hand, so it takes
+// nothing it cannot verify: no digest means no integrity check, and a name with a path separator would
+// be joined into a write path.
+test('pickAndroidWheel skips a wheel PyPI lists without a SHA-256 digest, or with a path in its name', () => {
+  const sha = { sha256: 'ab'.repeat(32) }
+  assert.equal(pickAndroidWheel([{ filename: 'x-1-py3-none-android_23_arm64_v8a.whl', url: 'u' }], 'arm64_v8a'), null, 'no digest')
+  assert.equal(pickAndroidWheel([{ filename: '../x-1-py3-none-android_23_arm64_v8a.whl', url: 'u', digests: sha }], 'arm64_v8a'), null, 'POSIX separator')
+  assert.equal(pickAndroidWheel([{ filename: '..\\x-1-py3-none-android_23_arm64_v8a.whl', url: 'u', digests: sha }], 'arm64_v8a'), null, 'Windows separator')
+})
+
 test('pickAndroidWheel prefers the highest API level when several are published', () => {
-  const f = (filename: string) => ({ filename, url: 'u' })
+  const f = (filename: string) => ({ filename, url: 'u', digests: { sha256: 'ab'.repeat(32) } })
   const picked = pickAndroidWheel(
     [f('x-1-py3-none-android_21_arm64_v8a.whl'), f('x-1-py3-none-android_24_arm64_v8a.whl'), f('x-1-py3-none-android_9_arm64_v8a.whl')],
     'arm64_v8a',
@@ -208,10 +218,13 @@ test('litertLmServeBlocker: a future version without _get_lib degrades to the pl
 test('litertLmEnvFingerprint: stable for an unchanged venv, invalidated by a reinstall', (t: TestContext) => {
   const env = tmpDir('turbollm-litert-fp-')
   t.after(() => rmSync(env, { recursive: true, force: true }))
-  const py = join(env, 'bin', 'python')
+  // The venv layout differs per OS (Scripts\python.exe + Lib\site-packages on Windows), and the
+  // fingerprint reads the real one — a POSIX-only fixture never changed on Windows (v1.14.5 review).
+  const win = process.platform === 'win32'
+  const py = win ? join(env, 'Scripts', 'python.exe') : join(env, 'bin', 'python')
   mkdirSync(dirname(py), { recursive: true })
   writeFileSync(py, '')
-  const pkg = join(env, 'lib', 'python3.12', 'site-packages', 'litert_lm')
+  const pkg = win ? join(env, 'Lib', 'site-packages', 'litert_lm') : join(env, 'lib', 'python3.12', 'site-packages', 'litert_lm')
   mkdirSync(pkg, { recursive: true })
 
   const before = litertLmEnvFingerprint(py)
@@ -223,24 +236,40 @@ test('litertLmEnvFingerprint: stable for an unchanged venv, invalidated by a rei
   utimesSync(pkg, later, later)
   assert.notEqual(litertLmEnvFingerprint(py), before, 'a touched package dir must invalidate the cache key')
 
-  assert.equal(litertLmEnvFingerprint(join(env, 'bin', 'no-such-python')), null, 'a missing interpreter cannot be fingerprinted')
+  assert.equal(litertLmEnvFingerprint(join(dirname(py), 'no-such-python')), null, 'a missing interpreter cannot be fingerprinted')
 })
 
-test('litertLmServeBlockerCached: one probe per environment, re-probed after the environment changes', { skip: process.platform === 'win32' }, async (t: TestContext) => {
-  const dir = tmpDir('turbollm-litert-cache-')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  // A failing stand-in interpreter that records each run — the probe classifies the failure
-  // (non-null blocker), which is exactly the slow path worth caching.
-  const runs = join(dir, 'runs')
+/** A stand-in interpreter that appends "run" to `runs` each time it starts, then exits with `code`. */
+function fakePython(dir: string, runs: string, code: number): string {
   const py = join(dir, 'bin', 'fake-python')
   mkdirSync(dirname(py), { recursive: true })
-  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`)
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit ${code}\n`)
   chmodSync(py, 0o755)
+  return py
+}
 
-  const first = await litertLmServeBlockerCached(py)
-  const second = await litertLmServeBlockerCached(py)
-  assert.ok(first, 'the failing interpreter must yield a blocker message')
-  assert.equal(second, first, 'a cached answer is the same answer')
+// v1.14.5 review: a failure is often fixed OUTSIDE the venv (Defender done scanning a fresh DLL, the
+// VC++ runtime installed, a newer glibc), which no fingerprint sees — so a cached failure outlived the
+// fix until the daemon restarted. Only a pass is cached; a failure costs one probe per load.
+test('litertLmServeBlockerCached: a failing probe is never cached, so the next load checks again', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-cache-fail-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const runs = join(dir, 'runs')
+  const py = fakePython(dir, runs, 1)
+
+  assert.ok(await litertLmServeBlockerCached(py), 'the failing interpreter must yield a blocker message')
+  await litertLmServeBlockerCached(py)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'a failure must be re-probed, not served from the cache')
+})
+
+test('litertLmServeBlockerCached: a passing probe runs once per environment, and again after the environment changes', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-cache-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const runs = join(dir, 'runs')
+  const py = fakePython(dir, runs, 0)
+
+  assert.equal(await litertLmServeBlockerCached(py), null)
+  assert.equal(await litertLmServeBlockerCached(py), null)
   assert.equal(readFileSync(runs, 'utf8').trim(), 'run', 'the probe must run exactly once for an unchanged environment')
 
   // Touching the interpreter changes the fingerprint → the probe re-runs.
@@ -260,6 +289,10 @@ test('isLitertLmProbeInconclusive: kills and timeouts answered nothing; a real e
   assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: 'SIGKILL', code: null }), true, 'killed by a signal')
   assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: null, code: 'ETIMEDOUT' }), true, 'spawn ETIMEDOUT')
   assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: null, code: 1 }), false, 'a non-zero exit is a real verdict')
+  // A native library that crashes on load (a bad instruction on an older CPU, a segfault) is a real
+  // answer about this machine, not a sign it was busy.
+  assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: 'SIGSEGV', code: null }), false, 'a crash on load')
+  assert.equal(isLitertLmProbeInconclusive({ killed: false, signal: 'SIGILL', code: null }), false, 'an unsupported instruction')
   assert.equal(isLitertLmProbeInconclusive(new Error('command not found')), false)
 })
 
@@ -281,6 +314,21 @@ test('litertLmServeBlockerCached: a timed-out probe is answered for that load bu
   const second = await litertLmServeBlockerCached(py, undefined, 1_000)
   assert.match(second ?? '', /did not finish/)
   assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the timed-out probe must be re-run, not served from the cache')
+})
+
+// A native crash leaves stderr empty, and Node's error message ends with the probe's own source, so the
+// "detail" used to be a line of Python like `load() if callable(load) else None` (v1.14.5 fix-delta review).
+test('litertLmServeBlocker: a native crash names the signal, not a line of the probe', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-crash-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, '#!/bin/sh\nkill -ILL $$\n')
+  chmodSync(py, 0o755)
+  const msg = await litertLmServeBlocker(py)
+  assert.match(msg ?? '', /could not load/)
+  assert.match(msg ?? '', /crashed \(SIGILL\)/)
+  assert.doesNotMatch(msg ?? '', /callable/)
 })
 
 test('litertLmServeBlocker: a timed-out probe reports the timeout, not a broken native runtime', { skip: process.platform === 'win32' }, async (t: TestContext) => {

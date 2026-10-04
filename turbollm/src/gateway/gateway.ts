@@ -333,8 +333,11 @@ export function registerGateway(app: Hono, d: Deps, opts: GatewayOptions = {}): 
     if (remote) {
       (oaiBody as Record<string, unknown>).model = remote.modelKey
     } else {
-      const oaiAlias = engineModelAlias(d.registry.active()?.kind ?? '', d.manager.currentOpts()?.modelPath)
+      const localKind = d.registry.active()?.kind ?? ''
+      const oaiAlias = engineModelAlias(localKind, d.manager.currentOpts()?.modelPath)
       if (oaiAlias) (oaiBody as Record<string, unknown>).model = oaiAlias
+      // mapToOpenAI emits `max_tokens`, which LiteRT-LM ignores (see applyEngineTokenLimit).
+      applyEngineTokenLimit(localKind, oaiBody as Record<string, unknown>)
     }
 
     // ── Concurrency: never exceed the engine's own slot count ─────────────────
@@ -1000,8 +1003,9 @@ export async function gatewayV1Handler(c: Context, d: Deps, opts: GatewayV1Optio
       if (parsedBody && maxLimit > 0) {
         parsedBody.max_tokens = clampMaxTokens(parsedBody.max_tokens as number | undefined, maxLimit)
       }
-      // LiteRT-LM only reads `max_completion_tokens` (see applyEngineTokenLimit).
-      if (parsedBody) applyEngineTokenLimit(d.registry.active()?.kind ?? '', parsedBody)
+      // LiteRT-LM only reads `max_completion_tokens` (see applyEngineTokenLimit). The local engine's
+      // kind says nothing about a Turbo Link host's engine, which shapes the request itself.
+      if (parsedBody && !remote) applyEngineTokenLimit(d.registry.active()?.kind ?? '', parsedBody)
       // Rewrite the outbound model id for engines that serve under a fixed alias
       // (mlx-lm / vLLM) or that require the real loaded model path (mlx-vlm).
       // Routing above already used the caller's original id.

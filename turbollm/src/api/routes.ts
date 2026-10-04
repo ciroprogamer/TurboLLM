@@ -1016,6 +1016,15 @@ export function registerApi(app: Hono, d: Deps): void {
     void (async () => {
       try {
         d.provision.start('litert-lm', 'runtime_env')
+        // Stop the engine FIRST when LiteRT-LM itself is the active one: the provision rewrites
+        // the venv's files (--reinstall, or -U on a real version bump), and Windows cannot
+        // overwrite a DLL that a running process has loaded — the install would die
+        // mid-rewrite. applyPipUpdate (the auto-update path) already stops first; this route is
+        // the same operation and must not be the one hole. The card never offers Install over a
+        // registered engine, but Update is one click away while it runs, and the API is
+        // callable directly either way.
+        const litert = d.registry.list().engines.find((e) => e.kind === 'litert-lm')
+        if (litert && d.registry.active()?.id === litert.id) await d.manager.stopAndWait()
         const rt = await ensureLitertLmEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), upgrade, ac.signal)
         const eng = d.registry.addLitertLm(`LiteRT-LM (${rt.version})`, rt.python, rt.version)
         d.registry.activate(eng.id)

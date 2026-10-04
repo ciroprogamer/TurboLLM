@@ -8,6 +8,7 @@ import { test, type TestContext } from 'node:test'
 import {
   androidWheelAbi,
   classifyLitertLmBlocker,
+  ensureLitertLmEnv,
   isLitertLmProbeInconclusive,
   litertLmConfigPath,
   litertLmEnvFingerprint,
@@ -360,4 +361,36 @@ test('litertLmProfileToConfig: an explicit backend overrides GPU detection and l
   assert.equal(litertLmProfileToConfig(p('cpu', 99), true).default.backend, 'cpu', 'forced CPU on a GPU machine')
   assert.equal(litertLmProfileToConfig(p('auto', 99), true).default.backend, 'gpu')
   assert.equal(litertLmProfileToConfig(p('auto', 99), false).default.backend, 'cpu')
+})
+
+// ── ensureLitertLmEnv itself must be the one to reset the cache (PR #271 follow-up): the
+// reset tests above prove resetLitertLmServeCache() drops a cached verdict, but nothing
+// called the provision — remove the finally inside ensureLitertLmEnv and every suite stayed
+// green. This locks the call in, with a provision that fails at the install step so nothing
+// is downloaded: the venv interpreter and its fingerprint are untouched by the failure, so
+// ONLY the finally's reset can explain the re-probe. ──
+
+test('ensureLitertLmEnv: a provision that fails still drops every cached serve verdict', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const root = tmpDir('turbollm-litert-ensurefail-')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  // A stand-in venv interpreter (present, so the provision skips venv creation and dies at
+  // the install step — the exact moment a cancelled provision leaves a half-installed venv)
+  // whose probe verdict gets cached, plus a failing stand-in uv. Neither touches the network.
+  const py = join(root, 'litert-lm', 'venv', 'bin', 'python')
+  const runs = join(root, 'runs')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`)
+  chmodSync(py, 0o755)
+  mkdirSync(join(root, 'uv'), { recursive: true })
+  writeFileSync(join(root, 'uv', 'uv'), '#!/bin/sh\nexit 1\n')
+  chmodSync(join(root, 'uv', 'uv'), 0o755)
+
+  const first = await litertLmServeBlockerCached(py)
+  assert.ok(first, 'the failing interpreter yields a blocker')
+  assert.equal(await litertLmServeBlockerCached(py), first, 'and it is cached')
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run', 'one probe so far')
+
+  await assert.rejects(ensureLitertLmEnv(root))
+  await litertLmServeBlockerCached(py)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the failed provision must have dropped the cached verdict')
 })

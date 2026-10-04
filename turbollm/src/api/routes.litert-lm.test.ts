@@ -14,7 +14,7 @@ import type { Deps } from '../deps'
 function appWithChecker(
   fetcher: (src: { source: string; ref: string }) => Promise<string>,
   installedVersion = '0.17.1',
-  opts: { noUpdates?: boolean } = {},
+  opts: { noUpdates?: boolean; activeEngineId?: string | null } = {},
 ) {
   const cfg: Record<string, unknown> = {
     daemon: { lanBind: false, requireApiKey: false, port: 6996, machineId: 'm', machineName: 'test' },
@@ -25,25 +25,43 @@ function appWithChecker(
     benchResults: {},
     modelDirs: [],
   }
-  const engines = [{
-    id: 'litert-1',
-    name: 'LiteRT-LM (litert-lm 0.17.1)',
-    kind: 'litert-lm',
-    binPath: '/engines/litert-lm/venv/bin/python',
-    version: `litert-lm ${installedVersion}`,
-    capabilities: { kvTypes: [], flags: [] },
-  }]
+  // Two engines: the LiteRT-LM one the route re-provisions, plus a non-LiteRT-LM one so
+  // "active, but not this one" can be expressed.
+  const engines = [
+    {
+      id: 'litert-1',
+      name: 'LiteRT-LM (litert-lm 0.17.1)',
+      kind: 'litert-lm',
+      binPath: '/engines/litert-lm/venv/bin/python',
+      version: `litert-lm ${installedVersion}`,
+      capabilities: { kvTypes: [], flags: [] },
+    },
+    {
+      id: 'other-1',
+      name: 'llama.cpp (b1234)',
+      kind: 'llama-server',
+      binPath: '/engines/llama/llama-server',
+      version: 'b1234',
+      capabilities: { kvTypes: [], flags: [] },
+    },
+  ]
   const provisionCalls: string[] = []
+  const managerCalls: string[] = []
   const d = {
     version: 'test',
     store: { snapshot: () => cfg, update: (fn: (c: never) => void) => fn(cfg as never), dir: () => '/tmp/turbollm-litert-route' },
     scanner: { list: () => ({ models: [], scanning: false, lastScanAt: '' }) },
-    manager: { status: () => ({ state: 'stopped', err: null, port: 0, pid: 0, model: null }) },
+    manager: {
+      status: () => ({ state: 'stopped', err: null, port: 0, pid: 0, model: null }),
+      stopAndWait: async () => { managerCalls.push('stopAndWait') },
+    },
     modelRouter: { loadedModelKeys: () => new Set<string>() },
     db: { lastGenTpsByModel: () => new Map<string, number>() },
     registry: {
       engines,
-      list: () => ({ engines, activeEngineId: 'litert-1' }),
+      list: () => ({ engines, activeEngineId: opts.activeEngineId ?? 'litert-1' }),
+      active: () =>
+        opts.activeEngineId === null ? undefined : engines.find((e) => e.id === (opts.activeEngineId ?? 'litert-1')),
       addLitertLm: (name: string) => ({ id: 'litert-2', name, activate: () => {} }),
       activate: () => {},
     },
@@ -62,7 +80,7 @@ function appWithChecker(
   } as unknown as Deps
   const app = new Hono()
   registerApi(app, d)
-  return { app, provisionCalls }
+  return { app, provisionCalls, managerCalls }
 }
 
 test('?update=1 with the installed version already latest refuses without provisioning', async () => {
@@ -139,4 +157,43 @@ test('?update=1 without a daemon UpdateChecker falls back to computeUpdateStatus
   } finally {
     globalThis.fetch = origFetch
   }
+})
+
+// ── the install/upgrade provision must stop a RUNNING LiteRT-LM first (PR #271 follow-up):
+// --reinstall (the plain install) and -U (a real version bump) both rewrite litert_lm's
+// files, and Windows cannot overwrite a DLL that a running process has loaded — the
+// provision would die mid-rewrite. applyPipUpdate (the auto-update path) stops first; this
+// route is the same operation and must not be the one hole. The card never offers Install
+// over a registered engine, but Update is one click away while it runs, and the API is
+// callable directly either way. ──
+
+test('an upgrade (?update=1, newer release) stops the active LiteRT-LM engine before re-provisioning', async () => {
+  const { app, managerCalls } = appWithChecker(async () => '0.18.0')
+  const res = await app.request('/api/v1/engines/litert-lm?update=1', { method: 'POST' })
+  assert.equal(res.status, 202)
+  // The provision body runs synchronously up to its first await (stopAndWait) before the
+  // 202 goes out — see the "genuinely newer release" test above — so the stop is already
+  // recorded by response time, structurally BEFORE ensureLitertLmEnv's first statement.
+  assert.deepEqual(managerCalls, ['stopAndWait'], 'the active engine must be stopped before the venv is rewritten')
+})
+
+test('a plain install also stops the active LiteRT-LM engine (--reinstall rewrites the same files)', async () => {
+  const { app, managerCalls } = appWithChecker(async () => '0.17.1')
+  const res = await app.request('/api/v1/engines/litert-lm', { method: 'POST' })
+  assert.equal(res.status, 202)
+  assert.deepEqual(managerCalls, ['stopAndWait'])
+})
+
+test('nothing is stopped when no engine is active, or when a DIFFERENT engine is the active one', async () => {
+  const none = appWithChecker(async () => '0.17.1', '0.17.1', { activeEngineId: null })
+  const r1 = await none.app.request('/api/v1/engines/litert-lm', { method: 'POST' })
+  assert.equal(r1.status, 202)
+  assert.deepEqual(none.managerCalls, [], 'a first install has nothing running to stop')
+
+  // ?update=1 with a genuinely newer release, so the route actually reaches the provision
+  // body (a same-version answer would honestly refuse with 200 before any stop could matter).
+  const other = appWithChecker(async () => '0.18.0', '0.17.1', { activeEngineId: 'other-1' })
+  const r2 = await other.app.request('/api/v1/engines/litert-lm?update=1', { method: 'POST' })
+  assert.equal(r2.status, 202)
+  assert.deepEqual(other.managerCalls, [], 'a running non-LiteRT-LM engine must not be stopped')
 })

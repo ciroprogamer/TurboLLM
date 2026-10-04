@@ -52,6 +52,24 @@ describe('CustomBuildDialog', () => {
     expect(screen.queryByPlaceholderText('https://github.com/owner/repo')).not.toBeInTheDocument()
   })
 
+  it('copies the manual build commands over plain http, where navigator.clipboard is missing', async () => {
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    const execCommand = vi.fn().mockReturnValue(true)
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true })
+    renderDialog()
+
+    await user.click(screen.getByRole('button', { name: /Add via git repo/ }))
+    await user.type(screen.getByPlaceholderText('My llama.cpp fork'), 'My Fork')
+    await user.type(screen.getByPlaceholderText('https://github.com/owner/repo'), 'https://github.com/owner/repo')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await screen.findByText('Build My Fork from source')
+    await user.click(screen.getByText('Copy'))
+
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(await screen.findByText('Copied!')).toBeInTheDocument()
+  })
+
   // jsdom's DismissableLayer doesn't reproduce the real browser race the fix guards against
   // (its pointerdown-outside detection never actually fires on a same-tick dialog swap here),
   // so the test above alone would pass even without the fix. This one asserts the code-level

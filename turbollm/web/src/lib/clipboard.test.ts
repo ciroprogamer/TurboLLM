@@ -33,14 +33,23 @@ describe('copyToClipboard', () => {
 
   it('falls back to selecting a hidden field over plain http (LAN)', async () => {
     setClipboardApi(false)
-    let copiedValue = ''
+    let selectedText = ''
     execCommand.mockImplementation(() => {
-      copiedValue = (document.activeElement as HTMLTextAreaElement).value
+      const field = document.activeElement as HTMLTextAreaElement
+      selectedText = field.value.slice(field.selectionStart, field.selectionEnd)
       return true
     })
     await copyToClipboard('lan text')
     expect(execCommand).toHaveBeenCalledWith('copy')
-    expect(copiedValue).toBe('lan text')
+    expect(selectedText).toBe('lan text')
+  })
+
+  it('selects the full range explicitly, since iOS Safari ignores select() on a read-only field', async () => {
+    setClipboardApi(false)
+    const setRange = vi.spyOn(HTMLTextAreaElement.prototype, 'setSelectionRange')
+    await copyToClipboard('lan text')
+    expect(setRange).toHaveBeenCalledWith(0, 'lan text'.length)
+    setRange.mockRestore()
   })
 
   it('falls back when the async API rejects', async () => {

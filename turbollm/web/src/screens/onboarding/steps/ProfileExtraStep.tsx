@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Check, Copy, Cpu, Settings2, Shield } from 'lucide-react'
+import { Check, Cpu, Settings2, Shield } from 'lucide-react'
 import { useEngines } from '../../../lib/queries'
 import { activateEngine } from '../../../lib/api'
+import { CopyButton } from '../../../components/ui/copy-button'
 import type { StepComponentProps } from '../OnboardingScreen'
 
 /** Step 4 — Profile step (spec 25 §4), runs during the download.
@@ -13,17 +14,10 @@ import type { StepComponentProps } from '../OnboardingScreen'
  *    variant is the auto-tune intro, handled by falling through to the
  *    generic branch below since it has nothing extra to configure here. */
 export default function ProfileExtraStep({ onContinue, ctx }: StepComponentProps) {
-  const [copied, setCopied] = useState(false)
   const enginesQuery = useEngines()
   const [activating, setActivating] = useState<string | null>(null)
 
   const endpoint = `${window.location.protocol}//${window.location.hostname}:6996/v1`
-
-  const copyEndpoint = async () => {
-    await navigator.clipboard.writeText(endpoint)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
 
   const pickEngine = async (id: string) => {
     setActivating(id)
@@ -56,13 +50,12 @@ export default function ProfileExtraStep({ onContinue, ctx }: StepComponentProps
           <h4 className="text-sm font-semibold text-ink mb-2">OpenAI/Anthropic-compatible endpoint</h4>
           <div className="flex items-center gap-2">
             <code className="flex-1 text-xs font-mono text-muted bg-panel rounded px-3 py-2 truncate">{endpoint}</code>
-            <button
-              type="button"
-              onClick={copyEndpoint}
-              className="flex-shrink-0 p-2 rounded-lg border border-border hover:border-accent/50 transition-colors"
-            >
-              {copied ? <Check size={14} className="text-accent" /> : <Copy size={14} className="text-muted" />}
-            </button>
+            <CopyButton
+              text={endpoint}
+              screen="developer"
+              size={14}
+              className="flex-shrink-0 p-2 rounded-lg border border-border hover:border-accent/50"
+            />
           </div>
           <p className="text-xs text-muted mt-2">Point Claude Code, Cursor, or any compatible client here.</p>
         </div>

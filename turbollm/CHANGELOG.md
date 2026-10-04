@@ -23,6 +23,10 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [1.14.4] - 2026-10-04
+
 ### Added
 
 - **Add your own engine by uploading its .zip.** In the Add-engine flow, "Upload a .zip…" now sits beside
@@ -38,6 +42,21 @@ published version on npm has a matching `vX.Y.Z` tag in git.
   official release assets are `.tar.gz`, so there it covers fork zips. The packaged Android app declines with
   a clear message (its OS forbids running downloaded binaries). Corrupt, encrypted, or oversized archives
   fail cleanly and never leave a half-installed build behind.
+
+### Fixed
+
+- **Copy buttons now work when TurboLLM is opened over your network or through a tunnel.** Browsers only allow
+  the clipboard on HTTPS or on the machine itself, so from `http://192.168.x.x:6996` every Copy button (chat messages,
+  code blocks, share links, the build commands, the API endpoint in onboarding, and the rest) silently did nothing.
+  They now fall back to a selection-based copy that works on plain http and puts the text on the clipboard of the
+  device you clicked on, not the computer running TurboLLM.
+
+### Discord
+
+- **Add your own engine from a .zip.** In Add engine, choose "Upload a .zip…" and TurboLLM finds and sets up the
+  llama-server inside it, runtime libraries included.
+- **Copy buttons work over your network.** Opening TurboLLM from another device on your LAN or through a tunnel no
+  longer breaks Copy; it copies to the device you are on.
 
 ## [1.14.3] - 2026-09-30
 

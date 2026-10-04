@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   CheckCircle2,
-  Copy,
   Download,
   ExternalLink,
   Hammer,
@@ -16,6 +15,7 @@ import { track } from '../../lib/api'
 import { useBuild, useBuildPrereqs, useSettings, useStatus, useSysInfo } from '../../lib/queries'
 import type { BuildPrereqTool, EngineBuild } from '../../lib/types'
 import { Button } from '../../components/ui/button'
+import { CopyButton } from '../../components/ui/copy-button'
 import {
   Dialog,
   DialogContent,
@@ -131,7 +131,6 @@ export function BuildGuideDialog({
   const settings = useSettings()
   const statusQ = useStatus()
   const build = useBuild()
-  const [copied, setCopied] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   // What the user last kicked off, so we can tell a CUDA download / prereq install apart from a
   // build (all stream through engineBuild + end at phase 'done', but only a build shows the
@@ -188,13 +187,6 @@ export function BuildGuideDialog({
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [engineBuild?.log])
-
-  const copy = () => {
-    void navigator.clipboard.writeText(commandText).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
 
   const recheck = async () => {
     // Persist the edited dirs (filtering blanks), then re-probe with the new PATH.
@@ -403,14 +395,14 @@ export function BuildGuideDialog({
                   <p className="text-[11px] text-faint">
                     {os === 'linux' ? 'Linux + CUDA' : os === 'macos' ? 'macOS + Metal' : 'Windows + CUDA'}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => { track('engines', 'copy_build_commands'); copy() }}
-                    className="inline-flex items-center gap-1 text-[12px] text-muted hover:text-ink"
-                  >
-                    {copied ? <CheckCircle2 size={13} style={{ color: 'var(--ok)' }} /> : <Copy size={13} />}
-                    {copied ? 'Copied' : 'Copy'}
-                  </button>
+                  <CopyButton
+                    text={commandText}
+                    label="Copy"
+                    size={13}
+                    screen="engines"
+                    action="copy_build_commands"
+                    className="text-[12px] text-muted hover:text-ink"
+                  />
                 </div>
                 <pre className="overflow-x-auto rounded-lg border border-border bg-panel-2 p-3 font-mono text-[12px] leading-relaxed text-ink">
                   {commandText}

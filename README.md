@@ -537,8 +537,9 @@ the engine as a swappable component.
 
 1. Compile or download any `llama-server`-compatible binary — stock
    [llama.cpp](https://github.com/ggml-org/llama.cpp), a community fork, or your own build.
-2. Point TurboLLM at the **folder** — it scans for the `llama-server` binary, runs a
-   **capability probe**, and learns exactly which flags and features that build supports.
+2. Point TurboLLM at the **folder** — or upload the build's **.zip** — and it scans for the
+   `llama-server` binary, runs a **capability probe**, and learns exactly which flags and features
+   that build supports.
    *(Optional: paste the source repo URL so TurboLLM flags when a newer build ships.)*
 3. Activate it. The load-parameter UI **adapts to that engine** — features the build doesn't
    support are hidden; ones it adds (e.g. low-bit KV cache, NextN) light up.

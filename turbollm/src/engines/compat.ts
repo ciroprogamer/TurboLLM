@@ -195,6 +195,14 @@ export function engineModelAlias(engineKind: string, modelPath?: string | null):
  * max-token limit just before this runs — so the smaller value is the only one guaranteed to still respect that limit.
  * The old "explicit `max_completion_tokens` wins" let a client bypass the daemon cap entirely by sending
  * `max_completion_tokens: 1000000` alongside a clamped `max_tokens` (which was then deleted). Mutates and returns `body`.
+ *
+ * ORDERING CONTRACT (PR #271 re-review): the min() above enforces the daemon cap only because the
+ * clamp ran first — with a limit configured, clampMaxTokens ALWAYS leaves a numeric `max_tokens`
+ * in the body (the limit itself when the request sent none), so the min() can never pair an
+ * uncapped `max_completion_tokens` with a missing `max_tokens`. A body with `max_completion_tokens`
+ * but NO `max_tokens` returns untouched at the guard below, which is correct only while no limit
+ * is configured. Any new caller MUST run clampMaxTokens immediately before this — the ordering
+ * test in compat.litert-lm.test.ts locks the shape every route produces.
  */
 export function applyEngineTokenLimit<T extends Record<string, unknown>>(engineKind: string, body: T): T {
   if (engineKind !== 'litert-lm' || !('max_tokens' in body)) return body

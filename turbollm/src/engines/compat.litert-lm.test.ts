@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { clampMaxTokens } from '../config/config'
 import { applyEngineTokenLimit, engineAcceptsFormat, engineModelAlias, modelIncompatibility } from './compat'
 
 const LITERT = { format: 'litertlm', audio: false } as const
@@ -87,4 +88,22 @@ test('applyEngineTokenLimit: every other engine is left untouched', () => {
   for (const kind of ['llama-server', 'mlx', 'vllm', 'sglang', 'mlx-vlm', 'koboldcpp']) {
     assert.deepEqual(applyEngineTokenLimit(kind, { max_tokens: 5 }), { max_tokens: 5 }, kind)
   }
+})
+
+test('applyEngineTokenLimit ordering: a client max_completion_tokens cannot exceed the clamped max_tokens (the shape every route produces)', () => {
+  // PR #271 re-review: the min() inside applyEngineTokenLimit enforces the daemon's
+  // max-token cap ONLY because every caller runs clampMaxTokens on `max_tokens` immediately
+  // before it — with a limit configured, clampMaxTokens ALWAYS leaves a numeric max_tokens
+  // in the body (the limit itself when the request sent none). This locks that exact
+  // two-step shape end to end: a client that sent max_completion_tokens: 1e6 with no
+  // max_tokens of its own still lands on the 8192 cap, and only max_completion_tokens —
+  // the one key litert-lm's server reads — goes out.
+  const limit = 8192
+  const reqBody: Record<string, unknown> = { model: 'm', max_completion_tokens: 1_000_000 }
+  const cappedMax = clampMaxTokens(reqBody.max_tokens as number | undefined, limit)
+  if (cappedMax != null) reqBody.max_tokens = cappedMax
+  else delete reqBody.max_tokens
+  applyEngineTokenLimit('litert-lm', reqBody)
+  assert.equal(reqBody.max_completion_tokens, 8192)
+  assert.equal('max_tokens' in reqBody, false)
 })

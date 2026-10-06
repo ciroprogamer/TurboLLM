@@ -1018,7 +1018,9 @@ export function registerApi(app: Hono, d: Deps): void {
         d.provision.start('litert-lm', 'runtime_env')
         // A loaded LiteRT-LM model holds the native library open (file-locked on Windows), so installing
         // into the venv under it fails midway. Keyed on what is RUNNING, not the active engine: an install
-        // activates an engine without stopping what is loaded, so the two can differ.
+        // activates an engine without stopping what is loaded, so the two can differ. (PR #275 arrived
+        // with the same guard keyed on the registry's active engine; main's v1.14.5 refinement is kept —
+        // it is the stricter of the two and covers the PR's case.)
         if (d.manager.currentOpts()?.engine.kind === 'litert-lm') await d.manager.stopAndWait()
         const rt = await ensureLitertLmEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), upgrade, ac.signal)
         const eng = d.registry.addLitertLm(`LiteRT-LM (${rt.version})`, rt.python, rt.version)

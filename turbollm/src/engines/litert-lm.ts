@@ -53,6 +53,10 @@ function venvPython(envDir: string): string {
  * version. When `upgrade` is true, passes `-U`. `signal` aborts a provision in flight (the web UI's Cancel): every
  * child process here takes it in its exec options, so an abort kills uv/pip and rejects with AbortError — the route
  * maps that to a clean "user cancelled" state instead of a failure banner.
+ *
+ * The whole body sits in a `finally` that clears the serve-preflight cache (see
+ * resetLitertLmServeCache): a provision that rewrote the venv — or died halfway through
+ * rewriting it — invalidates every cached verdict about the old files.
  */
 export async function ensureLitertLmEnv(
   root: string,
@@ -60,21 +64,33 @@ export async function ensureLitertLmEnv(
   upgrade = false,
   signal?: AbortSignal,
 ): Promise<LitertLmRuntime> {
-  if (process.platform === 'android') return ensureLitertLmAndroidEnv(root, onProgress, upgrade, signal)
-  const uv = await ensureUv(root, onProgress)
-  const envDir = join(root, 'litert-lm', 'venv')
-  const py = venvPython(envDir)
+  try {
+    if (process.platform === 'android') return await ensureLitertLmAndroidEnv(root, onProgress, upgrade, signal)
+    const uv = await ensureUv(root, onProgress)
+    const envDir = join(root, 'litert-lm', 'venv')
+    const py = venvPython(envDir)
 
-  if (!existsSync(py)) {
+    if (!existsSync(py)) {
+      onProgress?.({ phase: 'extracting', pct: -1 })
+      await execFileP(uv, ['venv', '--python', LITERT_LM_PYTHON, envDir], { cwd: root, signal })
+    }
     onProgress?.({ phase: 'extracting', pct: -1 })
-    await execFileP(uv, ['venv', '--python', LITERT_LM_PYTHON, envDir], { cwd: root, signal })
-  }
-  onProgress?.({ phase: 'extracting', pct: -1 })
-  const installArgs = ['pip', 'install', '--python', py, ...(upgrade ? ['-U'] : []), 'litert-lm']
-  await execFileP(uv, installArgs, { cwd: root, maxBuffer: 64 * 1024 * 1024, signal })
+    // `--reinstall` on the plain install (PR #271 re-review, live-verified on uv 0.12): a bare
+    // `uv pip install litert-lm` answers "Checked 1 package" and installs NOTHING when the
+    // version is already satisfied — so an Install over a half-installed venv (a cancelled
+    // provision leaves one behind) would register an engine whose files are still broken.
+    // --reinstall makes Install mean "a coherent environment": a no-op on a fresh venv, a full
+    // rewrite from the uv cache on a damaged one. The Update path keeps plain -U — the
+    // alreadyLatest short-circuit refuses same-version updates, and a real version bump
+    // rewrites everything anyway.
+    const installArgs = ['pip', 'install', '--python', py, ...(upgrade ? ['-U'] : ['--reinstall']), 'litert-lm']
+    await execFileP(uv, installArgs, { cwd: root, maxBuffer: 64 * 1024 * 1024, signal })
 
-  const version = await probeLitertLm(py, signal)
-  return { python: py, version }
+    const version = await probeLitertLm(py, signal)
+    return { python: py, version }
+  } finally {
+    resetLitertLmServeCache()
+  }
 }
 
 // ── Android (Termux) provisioning ────────────────────────────────────────────
@@ -124,8 +140,11 @@ async function findAndroidPython(): Promise<string> {
   throw new Error(ANDROID_PYTHON_HINT)
 }
 
-async function pypiJson(url: string): Promise<{ info: { version: string }; urls: PypiFile[] }> {
-  const r = await fetch(url, { signal: AbortSignal.timeout(60_000) })
+async function pypiJson(url: string, signal?: AbortSignal): Promise<{ info: { version: string }; urls: PypiFile[] }> {
+  // The caller's signal rides along with the timeout (PR #271 re-review): the web UI's Cancel
+  // must interrupt the metadata fetch too, not just the wheel download below — the same
+  // AbortSignal.any combination that fetch uses there.
+  const r = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) })
   if (!r.ok) throw new Error(`PyPI answered ${r.status} for ${url}`)
   return (await r.json()) as { info: { version: string }; urls: PypiFile[] }
 }
@@ -133,7 +152,7 @@ async function pypiJson(url: string): Promise<{ info: { version: string }; urls:
 async function installAndroidNativeWheel(py: string, root: string, version: string, signal?: AbortSignal): Promise<void> {
   const abi = androidWheelAbi(process.arch)
   if (!abi) throw new Error(`LiteRT-LM has no Android build for the ${process.arch} architecture.`)
-  const release = await pypiJson(`${PYPI}/litert-lm-api/${version}/json`)
+  const release = await pypiJson(`${PYPI}/litert-lm-api/${version}/json`, signal)
   const wheel = pickAndroidWheel(release.urls, abi)
   if (!wheel) throw new Error(`litert-lm-api ${version} publishes no verifiable Android ${abi} wheel.`)
 
@@ -178,8 +197,12 @@ export async function ensureLitertLmAndroidEnv(
     await execFileP(systemPython, ['-m', 'venv', envDir], { cwd: root, signal })
   }
   onProgress?.({ phase: 'extracting', pct: -1 })
+  // --force-reinstall is the Android twin of the desktop --reinstall (PR #271 re-review): pip
+  // skips an already-satisfied package, so without it a broken litert_lm_cli / builder / click
+  // would survive an Install. The packages are small and pure-Python, and the native wheel is
+  // re-unpacked unconditionally below — together they make Install mean "a coherent environment".
   const pip = (...args: string[]) =>
-    execFileP(py, ['-m', 'pip', 'install', '--disable-pip-version-check', ...(upgrade ? ['-U'] : []), ...args], { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 900_000, signal })
+    execFileP(py, ['-m', 'pip', 'install', '--disable-pip-version-check', '--force-reinstall', ...(upgrade ? ['-U'] : []), ...args], { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 900_000, signal })
   // --no-deps: litert-lm pins litert-lm-api==<same version>, and pip would reject its Android-tagged wheel.
   await pip('--no-deps', 'litert-lm')
   const version = (await probeLitertLm(py, signal)).replace(/^litert-lm /, '')
@@ -321,6 +344,21 @@ export function litertLmEnvFingerprint(python: string): string | null {
  *  failure would outlive the fix until the daemon restarted (v1.14.5 review). An abort
  *  propagates so the caller can treat the load as cancelled, not as pass/fail. */
 const serveBlockerCache = new Map<string, Promise<string | null>>()
+
+/** Drop every cached serve-preflight answer. Called when a provision finishes (successfully
+ *  or not — ensureLitertLmEnv wraps its whole body in this): the venv was just rewritten, or
+ *  died halfway through being rewritten, so any cached verdict describes files that no longer
+ *  exist. The fingerprint cannot catch this by itself on Android (PR #271 re-review): the
+ *  native wheel is unpacked by `zipfile -e` OVER the old files in place, which rewrites every
+ *  file in `litert_lm/` but never adds or removes a directory entry — and a directory's mtime
+ *  only changes when entries come and go. A cached "native runtime could not load" from before
+ *  the reinstall could therefore survive it, contradicting the "reinstalling may fix it" the
+ *  message itself advises, until the daemon restarted. Clearing here covers every provision
+ *  path (fresh install, Update, applyPipUpdate) in one place; the next load re-probes and
+ *  re-caches. */
+export function resetLitertLmServeCache(): void {
+  serveBlockerCache.clear()
+}
 
 /** Cached litertLmServeBlocker for the Manager's per-load preflight (see
  *  litertLmEnvFingerprint for why the probe is worth caching). Install-time callers

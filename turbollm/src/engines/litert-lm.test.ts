@@ -8,6 +8,7 @@ import { test, type TestContext } from 'node:test'
 import {
   androidWheelAbi,
   classifyLitertLmBlocker,
+  ensureLitertLmEnv,
   isLitertLmProbeInconclusive,
   litertLmConfigPath,
   litertLmEnvFingerprint,
@@ -19,6 +20,7 @@ import {
   litertLmServeBlockerCached,
   litertLmServerCommand,
   pickAndroidWheel,
+  resetLitertLmServeCache,
   warmUpLitertLm,
   writeLitertLmConfig,
 } from './litert-lm'
@@ -343,6 +345,55 @@ test('litertLmServeBlocker: a timed-out probe reports the timeout, not a broken 
   assert.doesNotMatch(msg ?? '', /could not load/)
 })
 
+// ── the cache must not survive a reinstall (PR #271 re-review) ──
+// The Android provision unpacks the native wheel with `zipfile -e` OVER the old files: every
+// file inside litert_lm/ is rewritten, but no directory entry is added or removed — and a
+// directory's mtime (the fingerprint's key) only changes when entries come and go. The
+// fingerprint therefore CANNOT see an in-place reinstall, so ensureLitertLmEnv clears the
+// cache in a finally instead. These tests lock both halves of that reasoning.
+
+test('litertLmEnvFingerprint: an in-place file rewrite (the zipfile -e reinstall shape) does not change the key', (t: TestContext) => {
+  const env = tmpDir('turbollm-litert-fp-inplace-')
+  t.after(() => rmSync(env, { recursive: true, force: true }))
+  const py = join(env, 'bin', 'python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, '')
+  const pkg = join(env, 'lib', 'python3.12', 'site-packages', 'litert_lm')
+  mkdirSync(join(pkg, 'native'), { recursive: true })
+  const so = join(pkg, 'native', 'liblitert-lm.so')
+  writeFileSync(so, 'old-bytes')
+
+  const before = litertLmEnvFingerprint(py)
+  // The reinstall shape: same entry set, new file CONTENT and mtime.
+  const later = new Date(Date.now() + 5000)
+  utimesSync(so, later, later)
+  assert.equal(litertLmEnvFingerprint(py), before, 'an overwritten-in-place file is invisible to the key — hence resetLitertLmServeCache')
+})
+
+test('litertLmServeBlockerCached: resetLitertLmServeCache drops the answer so the next load re-probes', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const dir = tmpDir('turbollm-litert-cachereset-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const runs = join(dir, 'runs')
+  // A PASSING stand-in (v1.14.5 semantics — carried into this PR's merge — cache only a
+  // pass; a failure is dropped the moment it lands), so there is a cached verdict for the
+  // reset to drop.
+  const py = join(dir, 'bin', 'fake-python')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit 0\n`)
+  chmodSync(py, 0o755)
+
+  const first = await litertLmServeBlockerCached(py)
+  assert.equal(first, null, 'a passing interpreter yields no blocker')
+  assert.equal(await litertLmServeBlockerCached(py), first, 'and it is served from the cache')
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run', 'one probe so far')
+
+  // A provision finished (ensureLitertLmEnv's finally) — the next load must re-measure the
+  // new files, not replay the verdict about the old ones.
+  resetLitertLmServeCache()
+  await litertLmServeBlockerCached(py)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the probe re-ran after the reset')
+})
+
 test('litertLmPrefillStats: prompt tokens over time-to-first-token, rounded to one decimal', () => {
   assert.deepEqual(litertLmPrefillStats(300, 1500), { promptMs: 1500, promptTps: 200 })
   assert.deepEqual(litertLmPrefillStats(100, 3000), { promptMs: 3000, promptTps: 33.3 })
@@ -361,4 +412,38 @@ test('litertLmProfileToConfig: an explicit backend overrides GPU detection and l
   assert.equal(litertLmProfileToConfig(p('cpu', 99), true).default.backend, 'cpu', 'forced CPU on a GPU machine')
   assert.equal(litertLmProfileToConfig(p('auto', 99), true).default.backend, 'gpu')
   assert.equal(litertLmProfileToConfig(p('auto', 99), false).default.backend, 'cpu')
+})
+
+// ── ensureLitertLmEnv itself must be the one to reset the cache (PR #271 follow-up): the
+// reset tests above prove resetLitertLmServeCache() drops a cached verdict, but nothing
+// called the provision — remove the finally inside ensureLitertLmEnv and every suite stayed
+// green. This locks the call in, with a provision that fails at the install step so nothing
+// is downloaded: the venv interpreter and its fingerprint are untouched by the failure, so
+// ONLY the finally's reset can explain the re-probe. ──
+
+test('ensureLitertLmEnv: a provision that fails still drops every cached serve verdict', { skip: process.platform === 'win32' }, async (t: TestContext) => {
+  const root = tmpDir('turbollm-litert-ensurefail-')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  // A stand-in venv interpreter (present, so the provision skips venv creation and dies at
+  // the install step — the exact moment a cancelled provision leaves a half-installed venv)
+  // whose PASSING probe verdict gets cached (v1.14.5 caches only passes, so a pass is the
+  // verdict the provision's finally must drop), plus a failing stand-in uv. Neither touches
+  // the network.
+  const py = join(root, 'litert-lm', 'venv', 'bin', 'python')
+  const runs = join(root, 'runs')
+  mkdirSync(dirname(py), { recursive: true })
+  writeFileSync(py, `#!/bin/sh\necho run >> "${runs}"\nexit 0\n`)
+  chmodSync(py, 0o755)
+  mkdirSync(join(root, 'uv'), { recursive: true })
+  writeFileSync(join(root, 'uv', 'uv'), '#!/bin/sh\nexit 1\n')
+  chmodSync(join(root, 'uv', 'uv'), 0o755)
+
+  const first = await litertLmServeBlockerCached(py)
+  assert.equal(first, null, 'the passing interpreter yields no blocker')
+  assert.equal(await litertLmServeBlockerCached(py), first, 'and it is cached')
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run', 'one probe so far')
+
+  await assert.rejects(ensureLitertLmEnv(root))
+  await litertLmServeBlockerCached(py)
+  assert.equal(readFileSync(runs, 'utf8').trim(), 'run\nrun', 'the failed provision must have dropped the cached verdict')
 })

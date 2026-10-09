@@ -1,8 +1,9 @@
 // Import-from-URL dialog (spec 10 §8). A URL field with a live filename preview;
-// client-side validation that the URL looks like a direct model file (.gguf or
-// .litertlm — the self-contained single-file formats) or an HF resolve blob URL;
-// on submit it enqueues a raw-URL download via useDownloadMutations and
-// closes — the item then appears in the DownloadsPanel.
+// client-side validation that the URL is an http(s) link to a single-file model
+// (.gguf or .litertlm — the self-contained formats) on any host — which covers HF
+// resolve links too, with blob links normalized to them first; on submit it enqueues
+// a raw-URL download via useDownloadMutations and closes — the item then appears in
+// the DownloadsPanel.
 
 import { useEffect, useMemo, useState } from 'react'
 import { Link2 } from 'lucide-react'
@@ -42,13 +43,16 @@ function parseHfRepoUrl(raw: string): string | null {
 }
 
 /** True when the URL is a plausible single-file model download target (spec 10 §8
- *  step 2): a `.gguf` (llama.cpp family) or `.litertlm` (LiteRT-LM) bundle — the two
- *  formats that are a complete model in one file — either as a plain path or as an HF
- *  resolve blob URL. A bare .safetensors is deliberately not accepted: without its
- *  config/tokenizer siblings it is a file no engine can load; those models belong to
- *  the repo view, which downloads the whole directory. The extension set itself is the
- *  shared SINGLE_FILE_MODEL_RE (lib/single-file-model.ts), parity-tested against the
- *  daemon's download guard. */
+ *  step 2): an http(s) path ending in `.gguf` (llama.cpp family) or `.litertlm`
+ *  (LiteRT-LM) — the two formats that are a complete model in one file. That one
+ *  extension test covers a plain file URL on ANY host and an HF resolve link alike
+ *  (both end in the file's name, and blob-form HF links were already rewritten to
+ *  /resolve/ by normalizeHfUrl before this runs) — so there is deliberately no
+ *  host-specific clause. A bare .safetensors is deliberately not accepted: without
+ *  its config/tokenizer siblings it is a file no engine can load; those models
+ *  belong to the repo view, which downloads the whole directory. The extension set
+ *  itself is the shared SINGLE_FILE_MODEL_RE (lib/single-file-model.ts),
+ *  parity-tested against the daemon's download guard. */
 function isValidModelFileUrl(raw: string): boolean {
   let u: URL
   try {
@@ -57,10 +61,7 @@ function isValidModelFileUrl(raw: string): boolean {
     return false
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
-  const path = u.pathname.toLowerCase()
-  if (SINGLE_FILE_MODEL_RE.test(path)) return true
-  // HF blob URL: huggingface.co/<repo>/resolve/<rev>/<file>.gguf|.litertlm
-  return u.hostname === 'huggingface.co' && /\/resolve\//i.test(u.pathname) && SINGLE_FILE_MODEL_RE.test(path)
+  return SINGLE_FILE_MODEL_RE.test(u.pathname.toLowerCase())
 }
 
 /** Derived filename from the URL path (spec 10 §8: filename preview). */

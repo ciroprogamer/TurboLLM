@@ -60,7 +60,9 @@ interface ManifestEntry {
  *  quant "Downloaded" only for the SPECIFIC repo it was pulled from — the identical
  *  model+quant from a different repo (a different requant, different sha256) is
  *  correctly shown as not-downloaded. Keyed primarily by sha256 (exact file
- *  identity), with (repo, filename) as the fallback when no hash is known. */
+ *  identity), with (repo, filename) as the fallback when no hash is known.
+ *  `filename` is the destination BASENAME — a repo listing that disambiguates
+ *  same-named files by full path must basename its side before comparing. */
 export interface ProvenanceEntry {
   repo: string
   filename: string

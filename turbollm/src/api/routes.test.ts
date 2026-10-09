@@ -259,6 +259,19 @@ function appWithRepoDetail(detail: unknown, provenance: unknown[], models: Model
   return app
 }
 
+/** Fetch a repo detail and return its `files` rows — the provenance-overlay tests
+ *  below assert on the annotated `downloaded` flags. */
+async function repoDetailFiles(
+  detail: { repo: string },
+  provenance: unknown[],
+  models: ModelEntry[],
+): Promise<{ downloaded: boolean }[]> {
+  const res = await appWithRepoDetail(detail, provenance, models).request(`/api/v1/hf/models/${detail.repo}`)
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as { files: { downloaded: boolean }[] }
+  return body.files
+}
+
 test('GET /api/v1/hf/models/:owner/:name annotates every checkpoint, leaving files untouched', async () => {
   const cp = (dir: string, sha: string) => ({
     dir,
@@ -300,4 +313,47 @@ test('a GGUF repo detail (no checkpoints) comes back exactly as before', async (
   const body = (await res.json()) as Record<string, unknown>
   assert.equal('checkpoints' in body, false)
   assert.deepEqual(body.files, [{ ...detail.files[0], downloaded: false, localKey: null }])
+})
+
+// The files overlay's provenance fallback: `filename` is always a BASENAME (downloads.ts
+// records the destination filename), while a repo that disambiguates same-named bundles
+// across subfolders lists them by FULL path (hf.ts litertlmFiles) — the fallback must
+// compare on the basename, and must yield to sha256 whenever both sides have one.
+test('provenance filename fallback matches on basename and yields to sha256', async () => {
+  const bundle = (name: string, sha: string) => ({ name, quant: 'GPU', sizeBytes: 5, parts: 1, mmproj: false, litertlm: true, sha256: sha, url: 'u' })
+  const detail = {
+    repo: 'litert-community/x-litert-lm', gated: false, license: '', downloads: 0, likes: 0, card: '',
+    litertlm: true,
+    files: [bundle('gpu/model.litertlm', 'sha-gpu'), bundle('web/model.litertlm', 'sha-web')],
+  }
+  const dest = join('D:', 'models', 'litert-community', 'x-litert-lm', 'model.litertlm')
+  const models = [entry({ key: 'litert-key', path: dest })]
+
+  // No provenance hash: the basename fallback resolves the full-path rows (both share
+  // the basename — the imprecision checkpoints already accept for identical
+  // model.safetensors names; bundles are LFS, so the sha256 key disambiguates in
+  // practice).
+  const noHash = [{ repo: 'litert-community/x-litert-lm', filename: 'model.litertlm', dest, at: '' }]
+  let files = await repoDetailFiles(detail, noHash, models)
+  assert.deepEqual(files.map((f) => f.downloaded), [true, true])
+
+  // Both hashes known: a basename match must not rescue a sha mismatch — only the
+  // exact bundle is Downloaded (a re-upload is a different file, same as a different
+  // repo's requant).
+  const withHash = [{ repo: 'litert-community/x-litert-lm', filename: 'model.litertlm', sha256: 'sha-gpu', dest, at: '' }]
+  files = await repoDetailFiles(detail, withHash, models)
+  assert.deepEqual(files.map((f) => f.downloaded), [true, false])
+
+  // A basename-listed GGUF with no hash on either side keeps matching by name, as before.
+  const ggufDetail = {
+    repo: 'bartowski/Qwen3-8B-GGUF', gated: false, license: '', downloads: 0, likes: 0, card: '',
+    files: [{ name: 'qwen3-8b-Q4_K_M.gguf', quant: 'Q4_K_M', sizeBytes: 4, parts: 1, mmproj: false, url: 'u' }],
+  }
+  const ggufDest = join('D:', 'models', 'bartowski', 'Qwen3-8B-GGUF', 'qwen3-8b-Q4_K_M.gguf')
+  files = await repoDetailFiles(
+    ggufDetail,
+    [{ repo: 'bartowski/Qwen3-8B-GGUF', filename: 'qwen3-8b-Q4_K_M.gguf', dest: ggufDest, at: '' }],
+    [entry({ key: 'gguf-key', path: ggufDest })],
+  )
+  assert.deepEqual(files.map((f) => f.downloaded), [true])
 })

@@ -51,6 +51,19 @@ describe('ImportUrlDialog — single-file model formats', () => {
     expect(screen.queryByText(/Enter a Hugging Face model link/i)).not.toBeInTheDocument()
   })
 
+  it('accepts an HF resolve link to a .gguf and enqueues it unchanged', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.type(input(), 'https://huggingface.co/bartowski/Qwen3-8B-GGUF/resolve/main/qwen3-8b-Q4_K_M.gguf')
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+
+    expect(enqueue).toHaveBeenCalledWith(
+      { url: 'https://huggingface.co/bartowski/Qwen3-8B-GGUF/resolve/main/qwen3-8b-Q4_K_M.gguf' },
+      expect.anything(),
+    )
+  })
+
   it('accepts an HF resolve link to a .litertlm bundle and enqueues the normalized URL', async () => {
     const user = userEvent.setup()
     renderDialog()

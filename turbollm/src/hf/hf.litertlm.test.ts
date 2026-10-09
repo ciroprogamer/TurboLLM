@@ -94,8 +94,74 @@ test('a mid-token common prefix is backed up to a separator, so near-identical d
     const detail = await client().getRepo('litert-community/Gemma3-1B-IT')
     assert.deepEqual(
       detail.files.map((f) => f.quant),
-      ['Mt6989', 'Mt6991'],
+      ['MT6989', 'MT6991'],
     )
+  } finally {
+    stub.restore()
+  }
+})
+
+test('letter+digit compound tokens label uppercase like quant labels — INT4, FP16, MT6989 — while words stay title-case', async () => {
+  // Casing must not depend on token LENGTH: an 'int4' beside a 'q4' both read as quant
+  // ids ('INT4'/'Q4'), not 'Int4' vs 'Q4'; 'fp16'/'bf16' read 'FP16'/'BF16'. Pure words
+  // over three chars still title-case.
+  const tree = [
+    file('gemma_q4.litertlm', 1_000_000_000, 'sha-q4'),
+    file('gemma_int4.litertlm', 1_100_000_000, 'sha-int4'),
+    file('gemma_fp16.litertlm', 1_200_000_000, 'sha-fp16'),
+    file('gemma_mediatek_mt6989.litertlm', 1_300_000_000, 'sha-mt'),
+    file('gemma_Google_Tensor_G5.litertlm', 1_400_000_000, 'sha-g5'),
+  ]
+  const stub = stubHf(tree)
+  try {
+    const detail = await client().getRepo('litert-community/gemma-variants')
+    const label = (name: string) => detail.files.find((f) => f.name === name)?.quant
+
+    assert.equal(label('gemma_q4.litertlm'), 'Q4')
+    assert.equal(label('gemma_int4.litertlm'), 'INT4')
+    assert.equal(label('gemma_fp16.litertlm'), 'FP16')
+    assert.equal(label('gemma_mediatek_mt6989.litertlm'), 'Mediatek MT6989')
+    assert.equal(label('gemma_Google_Tensor_G5.litertlm'), 'Google Tensor G5')
+  } finally {
+    stub.restore()
+  }
+})
+
+test('same-named bundles in different subfolders get their full repo path as the name, so every one stays selectable', async () => {
+  // Two 'model.litertlm' basenames in 'gpu/' and 'web/': with plain basenames the picker
+  // would list two indistinguishable rows (same name, same 'Default' label) and BOTH
+  // would enqueue the first tree match. The full-path name disambiguates selection,
+  // provenance and expansion; the label folds the subfolder in so the rows read apart.
+  const tree = [
+    file('README.md', 500),
+    file('gpu/model.litertlm', 1_000_000_000, 'sha-gpu'),
+    file('web/model.litertlm', 800_000_000, 'sha-web'),
+  ]
+  const stub = stubHf(tree, 'litert-community/two-builds')
+  try {
+    const detail = await client().getRepo('litert-community/two-builds')
+
+    assert.equal(detail.litertlm, true)
+    assert.deepEqual(
+      detail.files.map((f) => f.name),
+      ['web/model.litertlm', 'gpu/model.litertlm'], // size-ascending
+    )
+    assert.equal(detail.files.find((f) => f.name === 'gpu/model.litertlm')?.quant, 'GPU Model')
+    assert.equal(detail.files.find((f) => f.name === 'web/model.litertlm')?.quant, 'WEB Model')
+    assert.ok(detail.files.find((f) => f.name === 'gpu/model.litertlm')?.url.endsWith('/resolve/main/gpu/model.litertlm'))
+  } finally {
+    stub.restore()
+  }
+})
+
+test('expanding a full-path name from a basename-colliding repo resolves THAT bundle, not the first basename match', async () => {
+  const tree = [file('gpu/model.litertlm', 1_000_000_000, 'sha-gpu'), file('web/model.litertlm', 800_000_000, 'sha-web')]
+  const stub = stubHf(tree, 'litert-community/two-builds')
+  try {
+    const expanded = await client().expandModelFiles('litert-community/two-builds', 'web/model.litertlm')
+
+    assert.equal(expanded.dir, 'web')
+    assert.deepEqual(expanded.files, [{ rfilename: 'web/model.litertlm', size: 800_000_000, sha256: 'sha-web', mmproj: false }])
   } finally {
     stub.restore()
   }

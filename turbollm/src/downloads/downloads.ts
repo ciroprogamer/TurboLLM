@@ -78,8 +78,10 @@ const MAX_CONCURRENT = 2
  *  directory of component files (config.json + tokenizer + shards), which the HF repo
  *  path downloads file-by-file under a subdir; a lone .safetensors would land in the
  *  library as a file no engine can load. Shared by the raw-URL and repo-file guards so
- *  the two never drift apart. */
-const SINGLE_FILE_MODEL_RE = /\.(gguf|litertlm)$/i
+ *  the two never drift apart; also imported by the Turbo Link façade's file guard
+ *  (link/link-routes.ts) for the same reason, and mirrored client-side by the web's
+ *  web/src/lib/single-file-model.ts (parity-tested there against this definition). */
+export const SINGLE_FILE_MODEL_RE = /\.(gguf|litertlm)$/i
 
 export interface EnqueueInput {
   repo?: string

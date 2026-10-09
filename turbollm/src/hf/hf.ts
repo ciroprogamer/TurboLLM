@@ -151,6 +151,11 @@ interface CacheRow {
 
 const SPLIT_RE = /^(.*)-(\d{5})-of-(\d{5})\.gguf$/i
 
+/** A LiteRT-LM bundle — one self-contained model per `.litertlm` file. One definition
+ *  shared by every branch that recognises the format (repo classification, expansion,
+ *  variant labelling) so the extension can never drift between them. */
+const LITERTLM_RE = /\.litertlm$/i
+
 export class HfClient {
   private cache = new Map<string, CacheRow>()
 
@@ -215,7 +220,7 @@ export class HfClient {
 
     const ggufEntries = tree.filter((e) => e.type === 'file' && /\.gguf$/i.test(e.path))
     const safetensorsEntries = tree.filter((e) => e.type === 'file' && /\.safetensors$/i.test(e.path))
-    const litertlmEntries = tree.filter((e) => e.type === 'file' && /\.litertlm$/i.test(e.path))
+    const litertlmEntries = tree.filter((e) => e.type === 'file' && LITERTLM_RE.test(e.path))
 
     // Safetensors repo (MLX or vLLM): has safetensors weights but no GGUFs.
     const isSafetensors = ggufEntries.length === 0 && safetensorsEntries.length > 0
@@ -334,10 +339,12 @@ export class HfClient {
     }
 
     // A .litertlm bundle is one self-contained file: no split siblings to group, no mmproj
-    // companion to pair. Resolve the full repo path (the UI carries a basename, like the
-    // GGUF picker), plus size and sha256 from the tree so the enqueue disk-guard and the
-    // integrity check actually run — a 0-size fallback would skip both.
-    if (/\.litertlm$/i.test(rfilename)) {
+    // companion to pair. Resolve the full repo path — the UI sends a basename for unique
+    // names (the GGUF-picker convention) or the full path when a basename is ambiguous —
+    // plus size and sha256 from the tree so the enqueue disk-guard and the integrity
+    // check actually run (a 0-size fallback would skip both). The exact-path match wins
+    // first; the basename fallback exists for callers that only know the name.
+    if (LITERTLM_RE.test(rfilename)) {
       const chosen =
         tree.find((e) => e.type === 'file' && e.path === rfilename) ??
         tree.find((e) => e.type === 'file' && base(e.path).toLowerCase() === wantBase)
@@ -632,13 +639,23 @@ function fileFor(
  *  nothing to group and no mmproj to pair — unlike GGUFs, where a repo's files are quants
  *  of the same model, litert-community repos hold gpu/web/device VARIANTS, and `quant`
  *  carries that variant label so the same single-file picker the GGUF branch uses reads
- *  naturally for them. Name is the basename (the GGUF convention) so download provenance
- *  matches what the repo detail lists. */
+ *  naturally for them. `name` is the basename (the GGUF convention) so download provenance
+ *  matches what the repo detail lists — EXCEPT when two bundles share a basename across
+ *  subfolders: then every colliding entry carries its full repo path instead, so the
+ *  picker's selection, the enqueue provenance and expandModelFiles' exact-path match all
+ *  resolve the RIGHT bundle rather than whichever entry the basename fallback finds
+ *  first (the Turbo Link file guard already accepts subfolder paths, so remote downloads
+ *  keep working too). */
 function litertlmFiles(entries: RawTreeEntry[], urlFor: (path: string) => string): HfRepoFile[] {
   const names = entries.map((e) => e.path)
+  const basenameCount = new Map<string, number>()
+  for (const e of entries) {
+    const b = base(e.path)
+    basenameCount.set(b, (basenameCount.get(b) ?? 0) + 1)
+  }
   return entries
     .map((e) => ({
-      name: base(e.path),
+      name: (basenameCount.get(base(e.path)) ?? 0) > 1 ? e.path : base(e.path),
       quant: litertlmVariantLabel(names, e.path),
       sizeBytes: sizeOf(e),
       parts: 1,
@@ -651,31 +668,46 @@ function litertlmFiles(entries: RawTreeEntry[], urlFor: (path: string) => string
 }
 
 /** The label one `.litertlm` file gets in the variant picker: the file's distinguishing
- *  suffix after the longest stem all the repo's bundles share ('gemma-4-E2B-it-gpu' beside
- *  'gemma-4-E2B-it' → 'GPU'; 'Qwen3-0.6B.mediatek.mt6993' → 'Mediatek Mt6993'), titled the
- *  way quant labels read. The file that IS the shared stem gets 'Default'. When the common
- *  prefix ends mid-token ('…_mt6989' vs '…_mt6991' share '…_mt69') it is backed up to the
- *  last separator so a label never reads as a stray fragment ('Mt6989', not '89'). */
+ *  suffix after the longest stem all the repo's bundles share ('gemma-4-E2B-it-gpu'
+ *  beside 'gemma-4-E2B-it' → 'GPU'; 'Qwen3-0.6B.mediatek.mt6993' → 'Mediatek MT6993'),
+ *  titled the way quant labels read. Stems keep their repo-relative DIRECTORY, so bundles
+ *  that share a basename across subfolders ('gpu/model.litertlm' vs 'web/model.litertlm')
+ *  label apart ('GPU Model' / 'WEB Model') instead of both reading 'Default'; for the
+ *  all-root layout litert-community actually ships, the directory is empty and the label
+ *  is exactly the basename suffix it always was. The file that IS the shared stem gets
+ *  'Default'.
+ *  Labels are derived from the file set AS IT STANDS and are display-only — a repo adding
+ *  a file can shift them (a new bare bundle turns 'GPU' into 'Default') — so nothing may
+ *  persist them; downloads and provenance key off `name`, never off the label.
+ *  When the common prefix ends mid-token ('…_mt6989' vs '…_mt6991' share '…_mt69') it is
+ *  backed up to the last separator so a label never reads as a stray fragment ('MT6989',
+ *  not '89'). */
 function litertlmVariantLabel(names: string[], path: string): string {
-  const stems = names.map((n) => base(n).replace(/\.litertlm$/i, ''))
-  const stem = base(path).replace(/\.litertlm$/i, '')
+  const stems = names.map((n) => n.replace(LITERTLM_RE, ''))
+  const stem = path.replace(LITERTLM_RE, '')
   let prefix = stems[0] ?? stem
   for (const s of stems) {
     while (prefix && !s.startsWith(prefix)) prefix = prefix.slice(0, -1)
   }
   // A prefix that cuts a token in half would leave every label starting mid-word — back
   // it up to the last separator (or nothing) so suffixes always start at a token boundary.
-  if (prefix && stems.some((s) => s.length > prefix.length && !/[-_.]/.test(s[prefix.length] ?? ''))) {
-    const lastSep = Math.max(prefix.lastIndexOf('-'), prefix.lastIndexOf('_'), prefix.lastIndexOf('.'))
+  if (prefix && stems.some((s) => s.length > prefix.length && !/[-_.\/]/.test(s[prefix.length] ?? ''))) {
+    const lastSep = Math.max(prefix.lastIndexOf('-'), prefix.lastIndexOf('_'), prefix.lastIndexOf('.'), prefix.lastIndexOf('/'))
     prefix = lastSep >= 0 ? prefix.slice(0, lastSep + 1) : ''
   }
-  const suffix = stem.length > prefix.length ? stem.slice(prefix.length).replace(/^[-_. ]+/, '') : ''
-  // Short tokens in bundle names are acronyms (gpu, web, q4, npu) — upper-case them whole,
-  // title-case the rest, so the picker reads 'GPU' and 'Google Tensor G5', not 'Gpu'.
+  const suffix = stem.length > prefix.length ? stem.slice(prefix.length).replace(/^[-_.\/ ]+/, '') : ''
+  // Acronyms and letter+digit compounds read uppercase whole — 'gpu'/'web' → 'GPU'/'WEB'
+  // like quant labels write Q4, FP16, INT4, and SoC ids write MT6989/SM8750 (an 'int4'
+  // next to a 'q4' must not read 'Int4' vs 'Q4'); pure words title-case
+  // ('Google Tensor G5', 'Mediatek', not 'GOOGLE' or 'mediatek').
   const label = suffix
-    .split(/[-_. ]+/)
+    .split(/[-_.\/ ]+/)
     .filter(Boolean)
-    .map((tok) => (tok.length <= 3 ? tok.toUpperCase() : tok[0].toUpperCase() + tok.slice(1)))
+    .map((tok) =>
+      tok.length <= 3 || (/[a-z]/i.test(tok) && /\d/.test(tok))
+        ? tok.toUpperCase()
+        : tok[0].toUpperCase() + tok.slice(1),
+    )
     .join(' ')
     .trim()
   return label || 'Default'

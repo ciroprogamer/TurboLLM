@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link2 } from 'lucide-react'
 import { ApiError, track } from '../../lib/api'
 import { useDownloadMutations } from '../../lib/queries'
+import { SINGLE_FILE_MODEL_RE } from '../../lib/single-file-model'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../../components/ui/sheet'
@@ -45,7 +46,9 @@ function parseHfRepoUrl(raw: string): string | null {
  *  formats that are a complete model in one file — either as a plain path or as an HF
  *  resolve blob URL. A bare .safetensors is deliberately not accepted: without its
  *  config/tokenizer siblings it is a file no engine can load; those models belong to
- *  the repo view, which downloads the whole directory. */
+ *  the repo view, which downloads the whole directory. The extension set itself is the
+ *  shared SINGLE_FILE_MODEL_RE (lib/single-file-model.ts), parity-tested against the
+ *  daemon's download guard. */
 function isValidModelFileUrl(raw: string): boolean {
   let u: URL
   try {
@@ -55,15 +58,10 @@ function isValidModelFileUrl(raw: string): boolean {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
   const path = u.pathname.toLowerCase()
-  if (SINGLE_FILE_RE.test(path)) return true
+  if (SINGLE_FILE_MODEL_RE.test(path)) return true
   // HF blob URL: huggingface.co/<repo>/resolve/<rev>/<file>.gguf|.litertlm
-  return /huggingface\.co\/.*\/resolve\/.*\.(gguf|litertlm)$/i.test(`${u.host}${u.pathname}`)
+  return u.hostname === 'huggingface.co' && /\/resolve\//i.test(u.pathname) && SINGLE_FILE_MODEL_RE.test(path)
 }
-
-/** The single-file model extensions this dialog accepts — mirrored from the daemon's
- *  download guard (src/downloads/downloads.ts) so the client never promises a file the
- *  server would reject. */
-const SINGLE_FILE_RE = /\.(gguf|litertlm)$/i
 
 /** Derived filename from the URL path (spec 10 §8: filename preview). */
 function deriveFilename(raw: string): string {
@@ -84,7 +82,7 @@ function normalizeHfUrl(raw: string): string {
   try {
     if (raw.startsWith('hf://')) {
       const parts = raw.slice(5).split('/')
-      if (parts.length >= 3 && SINGLE_FILE_RE.test(parts[parts.length - 1])) {
+      if (parts.length >= 3 && SINGLE_FILE_MODEL_RE.test(parts[parts.length - 1])) {
         const [owner, repo, ...rest] = parts
         return `https://huggingface.co/${owner}/${repo}/resolve/main/${rest.join('/')}`
       }
@@ -92,7 +90,7 @@ function normalizeHfUrl(raw: string): string {
     const u = new URL(raw)
     if (u.hostname === 'huggingface.co') {
       const file = u.searchParams.get('show_file_info')
-      if (file && SINGLE_FILE_RE.test(file)) {
+      if (file && SINGLE_FILE_MODEL_RE.test(file)) {
         return `https://huggingface.co${u.pathname}/resolve/main/${file}`
       }
       u.pathname = u.pathname.replace(/\/blob\//, '/resolve/')

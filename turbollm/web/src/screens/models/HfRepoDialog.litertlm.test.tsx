@@ -100,6 +100,9 @@ describe('HfRepoContent — a .litertlm repo', () => {
 
     expect(screen.getByText('Variant')).toBeInTheDocument()
     expect(screen.getByText(/LiteRT-LM model — each file is one self-contained bundle/i)).toBeInTheDocument()
+    // The explainer must not claim every variant runs 'on CPU or GPU' — device builds
+    // (Tensor G5, MediaTek) only run on their hardware. It points at matching instead.
+    expect(screen.getByText(/Pick the variant matching your hardware/i)).toBeInTheDocument()
     // 16 GB VRAM, ~15% headroom + 1 GB baseline: the 2.6 GB Default fits, the 3.1 GB G5 too,
     // but the pre-select effect picks the LARGEST that fits (2.6 GB < 3.1 GB ≤ budget).
     expect(screen.getByRole('button', { name: /Google Tensor G5/ })).toBeInTheDocument()
@@ -158,6 +161,40 @@ describe('HfRepoContent — a .litertlm repo', () => {
       expect.anything(),
     )
     expect(enqueue).not.toHaveBeenCalled()
+  })
+})
+
+describe('HfRepoContent — a .litertlm repo with same-named bundles in different subfolders', () => {
+  it('lists both full-path entries as distinct rows and enqueues the exact one picked', async () => {
+    // The daemon disambiguates basename collisions by listing the full repo path as the
+    // name (hf.ts litertlmFiles) — this pins the UI half: two rows stay selectable
+    // (unique React keys, unique labels) and the picked one enqueues its exact path.
+    state.detail = repoDetail({
+      files: [
+        bundle('gpu/model.litertlm', 'GPU Model', 1.0e9, 'sha-gpu'),
+        bundle('web/model.litertlm', 'WEB Model', 0.8e9, 'sha-web'),
+      ],
+    })
+    const user = userEvent.setup()
+    renderContent()
+
+    // Pre-select picks the largest that fits (1.0 GB gpu) — open the picker and choose web.
+    await user.click(screen.getByRole('button', { name: /GPU Model/ }))
+    expect(screen.getAllByRole('menuitem').map((el) => el.textContent)).toEqual(
+      expect.arrayContaining(['WEB Model · 800 MB', 'GPU Model · 1.0 GB']),
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: /WEB Model/ }))
+    await user.click(screen.getByRole('button', { name: 'Download' }))
+
+    expect(queued()).toEqual([
+      {
+        repo: 'litert-community/gemma-4-E2B-it-litert-lm',
+        rfilename: 'web/model.litertlm',
+        size: 0.8e9,
+        sha256: 'sha-web',
+      },
+    ])
   })
 })
 

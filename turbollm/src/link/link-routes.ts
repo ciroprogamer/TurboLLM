@@ -16,6 +16,10 @@ import {
   removeDownload,
   type DownloadFailure,
 } from '../api/download-lifecycle'
+// The single-file model formats a repo-file download may produce — the SAME set the
+// download manager's own enqueue guards enforce, imported rather than restated so the
+// façade can never accept (or reject) a format the local route treats differently.
+import { SINGLE_FILE_MODEL_RE } from '../downloads/downloads'
 import { allowsModel, hasCapability } from './capabilities'
 import { applyScopedPatch, scrubConfigForRead } from './config-scope'
 import { canWake, hostIdleState } from './host-idle'
@@ -105,11 +109,14 @@ const HF_REPO_ID = /^[A-Za-z0-9][\w.-]*\/[\w.-]+$/
  *  traversal and no absolute-path shape. The two are the formats a standalone repo-file
  *  download can produce a loadable model from (safetensors need their whole directory,
  *  which the host's own UI enqueues file-by-file; the peer contract stays single-file).
- *  Forward slashes are allowed (HF repos have subfolders) — `\` is not, since it is a
+ *  The extension set itself is the download manager's SINGLE_FILE_MODEL_RE — one
+ *  definition across the local and façade transports. Forward slashes are allowed
+ *  (HF repos have subfolders, and the web picker sends a full repo path when two
+ *  bundles share a basename across them) — `\` is not, since it is a
  *  separator on the host even though it is a legal filename character on HF. */
 function isSafeRepoFile(rfilename: string): boolean {
   if (!rfilename || rfilename.length > 512) return false
-  if (!/\.(gguf|litertlm)$/i.test(rfilename)) return false
+  if (!SINGLE_FILE_MODEL_RE.test(rfilename)) return false
   if (rfilename.includes('\\') || rfilename.startsWith('/')) return false
   if (/^[A-Za-z]:/.test(rfilename)) return false
   return rfilename.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')

@@ -321,7 +321,8 @@ export function HfRepoContent({
           {isLitertlm && (
             <div className="rounded-md border border-border bg-panel-2 px-3 py-2.5 text-[12px] text-muted">
               LiteRT-LM model — each file is one self-contained bundle (weights + tokenizer) that
-              runs on the LiteRT-LM engine, on CPU or GPU. Pick a device or precision variant.
+              runs on the LiteRT-LM engine. Pick the variant matching your hardware (GPU, browser,
+              or a specific device).
             </div>
           )}
 

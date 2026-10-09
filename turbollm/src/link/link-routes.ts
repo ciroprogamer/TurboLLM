@@ -101,12 +101,15 @@ function reportServed(d: Deps, outcome: 'ok' | 'fail', streamed: boolean): void 
  *  builds a destination directory out of the string. */
 const HF_REPO_ID = /^[A-Za-z0-9][\w.-]*\/[\w.-]+$/
 
-/** A file WITHIN that repo: a `.gguf`, with no traversal and no absolute-path shape.
+/** A single-file model WITHIN that repo — a `.gguf` or a `.litertlm` bundle, with no
+ *  traversal and no absolute-path shape. The two are the formats a standalone repo-file
+ *  download can produce a loadable model from (safetensors need their whole directory,
+ *  which the host's own UI enqueues file-by-file; the peer contract stays single-file).
  *  Forward slashes are allowed (HF repos have subfolders) — `\` is not, since it is a
  *  separator on the host even though it is a legal filename character on HF. */
 function isSafeRepoFile(rfilename: string): boolean {
   if (!rfilename || rfilename.length > 512) return false
-  if (!/\.gguf$/i.test(rfilename)) return false
+  if (!/\.(gguf|litertlm)$/i.test(rfilename)) return false
   if (rfilename.includes('\\') || rfilename.startsWith('/')) return false
   if (/^[A-Za-z]:/.test(rfilename)) return false
   return rfilename.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
@@ -289,7 +292,7 @@ export function registerLinkApi(app: Hono, d: Deps, opts?: { authAlreadyRegister
    *     also reject a malformed one, but only after resolving a destination directory, and
    *     validating at the boundary is what makes a garbage id a clean 400 instead of a
    *     fault deeper in.
-   *   - `rfilename` must be a `.gguf` with no path traversal in it.
+   *   - `rfilename` must be a `.gguf`/`.litertlm` single-file model with no path traversal in it.
    *
    *  Three fields of `EnqueueInput` are deliberately DROPPED rather than passed through:
    *   - `subdir` is `join()`ed onto the host's model dir unsanitised — a peer-supplied
@@ -308,7 +311,7 @@ export function registerLinkApi(app: Hono, d: Deps, opts?: { authAlreadyRegister
         {
           error: {
             code: 'invalid_request',
-            message: "repo must be a Hugging Face 'owner/name' id and rfilename a .gguf file in it.",
+            message: "repo must be a Hugging Face 'owner/name' id and rfilename a .gguf or .litertlm model file in it.",
           },
         },
         400,

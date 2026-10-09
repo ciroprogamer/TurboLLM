@@ -1,6 +1,7 @@
 // Import-from-URL dialog (spec 10 §8). A URL field with a live filename preview;
-// client-side validation that the URL looks like a direct .gguf or an HF resolve
-// blob URL; on submit it enqueues a raw-URL download via useDownloadMutations and
+// client-side validation that the URL looks like a direct model file (.gguf or
+// .litertlm — the self-contained single-file formats) or an HF resolve blob URL;
+// on submit it enqueues a raw-URL download via useDownloadMutations and
 // closes — the item then appears in the DownloadsPanel.
 
 import { useEffect, useMemo, useState } from 'react'
@@ -39,9 +40,13 @@ function parseHfRepoUrl(raw: string): string | null {
   return null
 }
 
-/** True when the URL is a plausible GGUF download target (spec 10 §8 step 2):
- *  path ends in `.gguf` OR matches an HF resolve blob URL. */
-function isValidGgufUrl(raw: string): boolean {
+/** True when the URL is a plausible single-file model download target (spec 10 §8
+ *  step 2): a `.gguf` (llama.cpp family) or `.litertlm` (LiteRT-LM) bundle — the two
+ *  formats that are a complete model in one file — either as a plain path or as an HF
+ *  resolve blob URL. A bare .safetensors is deliberately not accepted: without its
+ *  config/tokenizer siblings it is a file no engine can load; those models belong to
+ *  the repo view, which downloads the whole directory. */
+function isValidModelFileUrl(raw: string): boolean {
   let u: URL
   try {
     u = new URL(raw)
@@ -50,10 +55,15 @@ function isValidGgufUrl(raw: string): boolean {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
   const path = u.pathname.toLowerCase()
-  if (path.endsWith('.gguf')) return true
-  // HF blob URL: huggingface.co/<repo>/resolve/<rev>/<file>.gguf
-  return /huggingface\.co\/.*\/resolve\/.*\.gguf$/i.test(`${u.host}${u.pathname}`)
+  if (SINGLE_FILE_RE.test(path)) return true
+  // HF blob URL: huggingface.co/<repo>/resolve/<rev>/<file>.gguf|.litertlm
+  return /huggingface\.co\/.*\/resolve\/.*\.(gguf|litertlm)$/i.test(`${u.host}${u.pathname}`)
 }
+
+/** The single-file model extensions this dialog accepts — mirrored from the daemon's
+ *  download guard (src/downloads/downloads.ts) so the client never promises a file the
+ *  server would reject. */
+const SINGLE_FILE_RE = /\.(gguf|litertlm)$/i
 
 /** Derived filename from the URL path (spec 10 §8: filename preview). */
 function deriveFilename(raw: string): string {
@@ -68,13 +78,13 @@ function deriveFilename(raw: string): string {
 
 /** Convert non-standard HF URL forms to a direct https resolve URL.
  *  Handles hf://owner/repo/file.gguf, ?show_file_info=file.gguf page URLs,
- *  and /blob/ viewer URLs (rewrites to /resolve/ direct-download).
- *  All other URLs are returned unchanged. */
+ *  and /blob/ viewer URLs (rewrites to /resolve/ direct-download) for either
+ *  single-file model format. All other URLs are returned unchanged. */
 function normalizeHfUrl(raw: string): string {
   try {
     if (raw.startsWith('hf://')) {
       const parts = raw.slice(5).split('/')
-      if (parts.length >= 3 && parts[parts.length - 1].toLowerCase().endsWith('.gguf')) {
+      if (parts.length >= 3 && SINGLE_FILE_RE.test(parts[parts.length - 1])) {
         const [owner, repo, ...rest] = parts
         return `https://huggingface.co/${owner}/${repo}/resolve/main/${rest.join('/')}`
       }
@@ -82,7 +92,7 @@ function normalizeHfUrl(raw: string): string {
     const u = new URL(raw)
     if (u.hostname === 'huggingface.co') {
       const file = u.searchParams.get('show_file_info')
-      if (file && file.toLowerCase().endsWith('.gguf')) {
+      if (file && SINGLE_FILE_RE.test(file)) {
         return `https://huggingface.co${u.pathname}/resolve/main/${file}`
       }
       u.pathname = u.pathname.replace(/\/blob\//, '/resolve/')
@@ -111,9 +121,10 @@ export function ImportUrlDialog({
   const wasNormalized = normalized !== trimmed
   const filename = useMemo(() => deriveFilename(normalized), [normalized])
   // A repo URL (owner/repo, no file) can't download directly — it holds many quants —
-  // so it's routed to the quant picker. A direct .gguf/resolve URL downloads as before.
+  // so it's routed to the quant picker. A direct .gguf/.litertlm/resolve URL downloads
+  // as before.
   const repoTarget = useMemo(() => parseHfRepoUrl(normalized), [normalized])
-  const validFile = trimmed.length > 0 && isValidGgufUrl(normalized)
+  const validFile = trimmed.length > 0 && isValidModelFileUrl(normalized)
   const valid = validFile || !!repoTarget
   const showInvalid = trimmed.length > 0 && !valid
 
@@ -161,8 +172,8 @@ export function ImportUrlDialog({
         <SheetHeader>
           <SheetTitle>Import from URL</SheetTitle>
           <SheetDescription>
-            Paste a <span className="font-mono">.gguf</span> link (any HTTPS host) or a Hugging Face model page — a repo
-            link opens its quant list to pick from.
+            Paste a <span className="font-mono">.gguf</span> or <span className="font-mono">.litertlm</span> link
+            (any HTTPS host) or a Hugging Face model page — a repo link opens its quant list to pick from.
           </SheetDescription>
         </SheetHeader>
 
@@ -172,7 +183,7 @@ export function ImportUrlDialog({
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
-            placeholder="https://huggingface.co/owner/repo  ·  or …/resolve/main/model.Q4_K_M.gguf"
+            placeholder="https://huggingface.co/owner/repo  ·  or …/resolve/main/model.Q4_K_M.gguf  ·  …/model.litertlm"
             className="font-mono text-[12px]"
           />
 
@@ -196,7 +207,8 @@ export function ImportUrlDialog({
 
           {showInvalid && (
             <p className="text-[12px]" style={{ color: 'var(--err)' }}>
-              Enter a Hugging Face model link, or an http(s) link ending in <span className="font-mono">.gguf</span>.
+              Enter a Hugging Face model link, or an http(s) link to a <span className="font-mono">.gguf</span> or{' '}
+              <span className="font-mono">.litertlm</span> model file.
             </p>
           )}
 

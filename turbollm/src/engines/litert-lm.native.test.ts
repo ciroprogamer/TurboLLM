@@ -7,9 +7,9 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { ConfigStore, type Engine } from '../config/config'
-import { packagedAppGpu } from '../sysinfo/sysinfo'
+import { autoThreadCount, availableMemBytes, packagedAppGpu, perfCoresFromSpeeds } from '../sysinfo/sysinfo'
 import { tmpDir } from '../test-support/tmp'
-import { isNativeLitertLm, LITERT_LM_NATIVE_SERVER, litertLmNativeVersion, litertLmServerCommand } from './litert-lm'
+import { isNativeLitertLm, LITERT_LM_NATIVE_SERVER, litertLmNativeVersion, litertLmProfileToConfig, litertLmServerCommand } from './litert-lm'
 import { pyEngineEnv } from './manager'
 import { engineForModel, Registry } from './registry'
 import { ensureAndroidBundledEngine } from './seed'
@@ -151,4 +151,31 @@ test('packagedAppGpu: the app-reported GPU is a unified-memory device, and only 
   assert.equal(packagedAppGpu('android', { TURBOLLM_ANDROID_GPU: 'Mali-G715' }), null) // Termux: vulkaninfo decides
   assert.equal(packagedAppGpu('linux', app), null)
   assert.equal(packagedAppGpu('android', { ...app, TURBOLLM_ANDROID_GPU: '  ' }), null)
+})
+
+test('perfCoresFromSpeeds: counts the cores within half the fastest, only on a big.LITTLE CPU', () => {
+  // Tensor G4 cpu_capacity: 4 × A520, 3 × A720, 1 × X4.
+  assert.equal(perfCoresFromSpeeds([160, 160, 160, 160, 768, 768, 768, 1024]), 4)
+  assert.equal(perfCoresFromSpeeds([1024, 1024, 1024, 1024]), null, 'homogeneous: keep the default')
+  assert.equal(perfCoresFromSpeeds([NaN, NaN]), null, 'unreadable sysfs')
+  assert.equal(autoThreadCount({ cores: 8, perfCores: 4 }), 4)
+  assert.equal(autoThreadCount({ cores: 8 }), 4)
+  assert.equal(autoThreadCount({ cores: 12 }), 6)
+})
+
+test('litertLmProfileToConfig: auto threads become the performance-core count; an explicit count still wins', () => {
+  assert.equal(litertLmProfileToConfig({ ctx: 0, ngl: 0, threads: 0 }, false, 4).default.cpu_thread_count, 4)
+  assert.equal(litertLmProfileToConfig({ ctx: 0, ngl: 0, threads: 2 }, false, 4).default.cpu_thread_count, 2)
+  assert.equal(litertLmProfileToConfig({ ctx: 0, ngl: 0, threads: 0 }, false).default.cpu_thread_count, undefined)
+})
+
+test('pyEngineEnv: the native LiteRT-LM server gets a writable cache directory for read-only model folders', () => {
+  const dataDir = tmpDir('tllm-litert-native-')
+  assert.equal(pyEngineEnv('litert-lm', dataDir, '/app/lib/arm64/liblitertlm_server.so')!.TURBOLLM_LITERT_CACHE_DIR, join(dataDir, 'cache', 'litert-lm'))
+  assert.equal(pyEngineEnv('llama-server', dataDir, '/app/lib/arm64/libllama-server.so')!.TURBOLLM_LITERT_CACHE_DIR, undefined)
+})
+
+test('availableMemBytes: reads MemAvailable, which counts the page cache Android keeps full', () => {
+  const meminfo = 'MemTotal:        7812345 kB\nMemFree:          212000 kB\nMemAvailable:    3500000 kB\n'
+  assert.equal(availableMemBytes(meminfo), 3500000 * 1024)
 })

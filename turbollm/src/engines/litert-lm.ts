@@ -397,11 +397,13 @@ export interface LitertLmConfig {
  * cpu or gpu outright; `auto` (the default) follows the KoboldCpp convention: `ngl > 0` on a machine with a GPU means
  * the GPU backend and everything else means CPU.
  *   ctx     → max_num_tokens   (the KV-cache length; a bundle exported with a shorter one still caps it)
- *   threads → cpu_thread_count (only when set; 0 = let the runtime choose)
+ *   threads → cpu_thread_count (when set; 0 = `autoThreads` if given — the performance cores on a phone, where the
+ *             runtime's own fixed default can land threads on efficiency cores — else the runtime chooses)
  */
 export function litertLmProfileToConfig(
   p: { ctx: number; ngl: number; threads: number; litertLm?: { backend?: 'auto' | 'cpu' | 'gpu' } },
   hasGpu: boolean,
+  autoThreads = 0,
 ): LitertLmConfig {
   // An explicit choice wins over detection: Android/Termux cannot report a GPU, so `auto` would pin it to CPU.
   const choice = p.litertLm?.backend ?? 'auto'
@@ -409,6 +411,7 @@ export function litertLmProfileToConfig(
   const config: LitertLmConfig = { default: { backend } }
   if (Number.isInteger(p.ctx) && p.ctx > 0) config.default.max_num_tokens = p.ctx
   if (Number.isInteger(p.threads) && p.threads > 0) config.default.cpu_thread_count = p.threads
+  else if (Number.isInteger(autoThreads) && autoThreads > 0) config.default.cpu_thread_count = autoThreads
   return config
 }
 

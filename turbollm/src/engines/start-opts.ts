@@ -13,7 +13,7 @@ import type { StartOpts } from './manager'
 import { mlxSamplingArgs } from './mlx'
 import { type LoadProfile, profileToArgs, resolveProfile, vllmProfileToArgs } from '../models/profile'
 import type { ModelEntry } from '../models/scanner'
-import { type SysInfo, primaryVendor } from '../sysinfo/sysinfo'
+import { autoThreadCount, type SysInfo, primaryVendor } from '../sysinfo/sysinfo'
 
 export interface BuildStartOptsInput {
   /** Precondition: loadable (not incomplete, no parseError), a format the engine accepts, and not
@@ -92,7 +92,8 @@ function buildLitertLmStartOpts({ entry, engine, cfg, sys, overrides, trigger }:
     model: { key: entry.key, name: entry.name, quant: entry.quant, ctx: profile.ctx, vision: false },
     modelPath: entry.path,
     extraArgs: profile.extraArgs,
-    litertLmConfig: litertLmProfileToConfig(profile, sys.gpus.length > 0),
+    // Auto threads are pinned only where the CPU is big.LITTLE (perfCores); elsewhere the runtime keeps choosing.
+    litertLmConfig: litertLmProfileToConfig(profile, sys.gpus.length > 0, sys.perfCores ? autoThreadCount(sys) : 0),
     preferredPort: profile.port,
     profile,
     trigger,

@@ -906,6 +906,10 @@ export function pyEngineEnv(kind: string, dataDir: string, binPath: string): Nod
       const dyld = process.env.DYLD_LIBRARY_PATH
       env.DYLD_LIBRARY_PATH = dyld ? `${dir}:${dyld}` : dir
     }
+    // The native LiteRT-LM server keeps its compiled-model cache (XNNPACK weight packing, GPU programs) next to the
+    // model, so a reload skips that work. A model in a folder it cannot write to would recompile on every load; this
+    // directory is where it caches instead.
+    if (kind === 'litert-lm') env.TURBOLLM_LITERT_CACHE_DIR = join(dataDir, 'cache', 'litert-lm')
     return env
   }
   const hfHome = join(dataDir, 'hf-cache')

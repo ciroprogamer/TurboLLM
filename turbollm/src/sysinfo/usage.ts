@@ -14,7 +14,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import os from 'node:os'
-import { getSysInfo, type SysInfo } from './sysinfo'
+import { availableMemBytes, getSysInfo, type SysInfo } from './sysinfo'
 import {
   type CpuTimes,
   type DiskCounters,
@@ -496,7 +496,7 @@ async function tick(): Promise<HwUsage> {
     latest = {
       cpuPct,
       ram: {
-        usedMb: Math.round((os.totalmem() - os.freemem()) / 1e6),
+        usedMb: Math.round((os.totalmem() - availableMemBytes()) / 1e6),
         totalMb: Math.round(os.totalmem() / 1e6),
       },
       gpus: mergeUsage(getSysInfo(), samples),

@@ -27,7 +27,7 @@ import { buildBenchResultConfig } from '../telemetry/events/perf'
 import { shouldEmitBenchResult, benchRateLimitKey, MIN_GEN_TOKENS_FOR_BENCH } from '../telemetry/runtime/bench-rate-limit'
 import { resolveProfile, type LoadProfile } from '../models/profile'
 import type { ModelInfo } from '../engines/manager'
-import { litertLmPrefillStats } from '../engines/litert-lm'
+import { litertLmPrefillStats, litertLmTurnErrorMessage } from '../engines/litert-lm'
 import { getModelProfile } from '../config/config'
 import { getSysInfo } from '../sysinfo/sysinfo'
 import { noteLocalActivity } from '../link/host-idle'
@@ -851,6 +851,24 @@ export function resilientSink(sink: EmitSink): EmitSink & { clientGone: () => bo
   return Object.assign(wrapped, { clientGone: () => gone })
 }
 
+/** An error the engine reported INSIDE a 200 stream, as `data: {"error": ...}`. llama-server does this when a
+ *  request fails after streaming began, and LiteRT-LM does it for every runtime failure (a prompt longer than the
+ *  bundle's context, for one). Such a chunk has no `choices`, so the round loop skipped it and the turn ended as an
+ *  empty message with no reason given. */
+export class EngineStreamError extends Error {}
+
+/** The error message an SSE chunk carries, if it is an error chunk: `{"error": "…"}` or `{"error": {"message": "…"}}`. */
+export function streamChunkError(chunk: Record<string, unknown>): string | null {
+  const err = chunk.error
+  if (typeof err === 'string' && err.trim()) return err.trim()
+  if (err && typeof err === 'object') {
+    const msg = (err as { message?: unknown }).message
+    if (typeof msg === 'string' && msg.trim()) return msg.trim()
+    return JSON.stringify(err)
+  }
+  return null
+}
+
 /** The whole generation turn: engine call(s), tool loop, and the ONE write-back that persists
  *  the reply. Exported ONLY so tests can drive it with a sink of their own — the persistence
  *  invariant this function owns (GitHub #177: generated output must survive a client that has
@@ -1122,7 +1140,14 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       const res = await callChatUpstream(upstream, reqBody, ac.signal, undefined, d)
 
       if (!res.ok || !res.body) {
-        await emit({ event: 'error', data: { code: 'engine_error', message: `Engine returned ${res.status}` } })
+        // The engine's own reason, when its error body has one, says far more than the status code.
+        let reason = ''
+        try {
+          const text = await res.text()
+          try { reason = streamChunkError(JSON.parse(text) as Record<string, unknown>) ?? '' } catch { reason = text.trim().slice(0, 500) }
+        } catch { /* no body */ }
+        if (reason && engineKind === 'litert-lm') reason = litertLmTurnErrorMessage(reason)
+        await emit({ event: 'error', data: { code: 'engine_error', message: reason ? `Engine returned ${res.status}: ${reason}` : `Engine returned ${res.status}` } })
         return
       }
 
@@ -1167,6 +1192,8 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
 
           let chunk: Record<string, unknown>
           try { chunk = JSON.parse(raw) as Record<string, unknown> } catch { continue }
+          const engineError = streamChunkError(chunk)
+          if (engineError) throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
 
           // Prompt progress
           const pp = chunk.prompt_progress as { processed?: number; total?: number; tps?: number } | undefined
@@ -1485,6 +1512,8 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
             if (raw === '[DONE]') break roundLoop
             let chunk: Record<string, unknown>
             try { chunk = JSON.parse(raw) as Record<string, unknown> } catch { continue }
+            const engineError = streamChunkError(chunk)
+            if (engineError) throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
             if (chunk.usage) finalUsage = chunk.usage as typeof finalUsage
             if (chunk.timings) finalTimings = chunk.timings as typeof finalTimings
             // #52 item 9: the extra pass re-sends the whole conversation, so ITS prompt is the
@@ -1543,7 +1572,8 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
       // the whole function and skipped the `db.updateMessage` below, discarding everything the
       // model had already generated. Nothing after this point may be allowed to throw.
       try {
-        await emit({ event: 'error', data: { code: 'engine_stopped', message: (e as Error).message } })
+        const code = e instanceof EngineStreamError ? 'engine_error' : 'engine_stopped'
+        await emit({ event: 'error', data: { code, message: (e as Error).message } })
       } catch { /* client gone — the message is still persisted below */ }
     }
   } finally {

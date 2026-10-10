@@ -1062,6 +1062,10 @@ export type HfRepoFile = {
   safetensors?: boolean
   /** True for LiteRT-LM bundle files (.litertlm) — one self-contained model per file. */
   litertlm?: boolean
+  /** For a `.litertlm` bundle: the hardware-variant label ('GPU', 'Mediatek MT6993') —
+   *  the build this bundle targets. `quant` keeps its usual meaning (the precision the
+   *  name states, '?' when none — same as the library), so the two never collide. */
+  variant?: string
   sha256?: string
   url: string
   /** True when this exact repo file was downloaded via TurboLLM and is still on

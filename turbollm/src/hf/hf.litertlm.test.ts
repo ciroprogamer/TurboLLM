@@ -5,6 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { HfClient, type RawTreeEntry } from './hf'
+import { DownloadError } from '../downloads/downloads'
 
 const client = () => new HfClient(() => '', '0.0.0-test')
 
@@ -62,6 +63,11 @@ test('a .litertlm repo is a litertlm repo: one self-contained entry per bundle, 
       assert.equal(f.parts, 1)
       assert.equal(f.mmproj, false)
       assert.ok(f.url.endsWith(`/resolve/main/${f.name}`), f.url)
+      // Every bundle row carries both labels: the hardware variant, and the precision
+      // the name states ('?' when it states none — the same reading the library scanner
+      // gives the downloaded file, so Discover and the library agree on one file).
+      assert.ok(f.variant && f.variant.length > 0, f.name)
+      assert.equal(f.quant, '?')
     }
     assert.equal(detail.files.find((f) => f.name === 'gemma-4-E2B-it.litertlm')?.sha256, 'sha-base')
   } finally {
@@ -73,7 +79,7 @@ test('litertlm variant labels read as the distinguishing suffix, not the shared 
   const stub = stubHf(LITERT_TREE)
   try {
     const detail = await client().getRepo('litert-community/gemma-4-E2B-it-litert-lm')
-    const label = (name: string) => detail.files.find((f) => f.name === name)?.quant
+    const label = (name: string) => detail.files.find((f) => f.name === name)?.variant
 
     assert.equal(label('gemma-4-E2B-it.litertlm'), 'Default')
     assert.equal(label('gemma-4-E2B-it-gpu.litertlm'), 'GPU')
@@ -93,8 +99,14 @@ test('a mid-token common prefix is backed up to a separator, so near-identical d
   try {
     const detail = await client().getRepo('litert-community/Gemma3-1B-IT')
     assert.deepEqual(
-      detail.files.map((f) => f.quant),
+      detail.files.map((f) => f.variant),
       ['MT6989', 'MT6991'],
+    )
+    // The precision the name states rides in `quant`, exactly as the library scanner
+    // reads the same file after download — one field, one meaning.
+    assert.deepEqual(
+      detail.files.map((f) => f.quant),
+      ['Q4', 'Q4'],
     )
   } finally {
     stub.restore()
@@ -115,13 +127,22 @@ test('letter+digit compound tokens label uppercase like quant labels — INT4, F
   const stub = stubHf(tree)
   try {
     const detail = await client().getRepo('litert-community/gemma-variants')
-    const label = (name: string) => detail.files.find((f) => f.name === name)?.quant
+    const label = (name: string) => detail.files.find((f) => f.name === name)?.variant
+    const quant = (name: string) => detail.files.find((f) => f.name === name)?.quant
 
     assert.equal(label('gemma_q4.litertlm'), 'Q4')
     assert.equal(label('gemma_int4.litertlm'), 'INT4')
     assert.equal(label('gemma_fp16.litertlm'), 'FP16')
     assert.equal(label('gemma_mediatek_mt6989.litertlm'), 'Mediatek MT6989')
     assert.equal(label('gemma_Google_Tensor_G5.litertlm'), 'Google Tensor G5')
+    // `quant` is the scanner's precision reading of the same names — the device labels
+    // above live in `variant`, so a file never shows 'Q4' in Discover and 'GPU' in the
+    // library off the same field.
+    assert.equal(quant('gemma_q4.litertlm'), 'Q4')
+    assert.equal(quant('gemma_int4.litertlm'), 'INT4')
+    assert.equal(quant('gemma_fp16.litertlm'), 'FP16')
+    assert.equal(quant('gemma_mediatek_mt6989.litertlm'), '?')
+    assert.equal(quant('gemma_Google_Tensor_G5.litertlm'), '?')
   } finally {
     stub.restore()
   }
@@ -146,8 +167,8 @@ test('same-named bundles in different subfolders get their full repo path as the
       detail.files.map((f) => f.name),
       ['web/model.litertlm', 'gpu/model.litertlm'], // size-ascending
     )
-    assert.equal(detail.files.find((f) => f.name === 'gpu/model.litertlm')?.quant, 'GPU Model')
-    assert.equal(detail.files.find((f) => f.name === 'web/model.litertlm')?.quant, 'WEB Model')
+    assert.equal(detail.files.find((f) => f.name === 'gpu/model.litertlm')?.variant, 'GPU Model')
+    assert.equal(detail.files.find((f) => f.name === 'web/model.litertlm')?.variant, 'WEB Model')
     assert.ok(detail.files.find((f) => f.name === 'gpu/model.litertlm')?.url.endsWith('/resolve/main/gpu/model.litertlm'))
   } finally {
     stub.restore()
@@ -187,6 +208,46 @@ test('a repo with safetensors weights keeps that classification even when it als
     const detail = await client().getRepo('someone/mixed-st')
     assert.equal(detail.safetensors, true)
     assert.equal(detail.litertlm, undefined)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('bundles beside config-LESS safetensors classify as litertlm — those weights are not a loadable directory either', async () => {
+  // A litert-community repo can carry a stray .safetensors (original weights, an
+  // adapter) next to its bundles. Without a root config.json the safetensors are not a
+  // loadable HF directory, so classifying the repo safetensors would hand the LiteRT-LM
+  // engine (Discover filtered to library=litert-lm) a directory download it cannot load —
+  // the bundles win instead.
+  const tree = [file('README.md', 500), file('adapter.safetensors', 900_000_000, 'sha-st'), file('model_q4.litertlm', 3_000_000_000, 'sha-lt')]
+  const stub = stubHf(tree)
+  try {
+    const detail = await client().getRepo('litert-community/bundle-with-adapter')
+    assert.equal(detail.litertlm, true)
+    assert.equal(detail.safetensors, undefined)
+    assert.deepEqual(detail.files.map((f) => f.name), ['model_q4.litertlm'])
+  } finally {
+    stub.restore()
+  }
+})
+
+test('expanding an ambiguous basename rejects instead of resolving whichever bundle comes first', async () => {
+  // Two 'model.litertlm' in 'gpu/' and 'web/': a caller that only knows the basename (an
+  // older peer UI over Turbo Link, a raw API client) cannot be served by a first-match
+  // guess — size and sha256 would come from the wrong entry and the wrong variant would
+  // install silently with a passing integrity check. A typed rejection tells the caller
+  // to send the full repo path.
+  const tree = [file('gpu/model.litertlm', 1_000_000_000, 'sha-gpu'), file('web/model.litertlm', 800_000_000, 'sha-web')]
+  const stub = stubHf(tree, 'litert-community/two-builds')
+  try {
+    await assert.rejects(
+      () => client().expandModelFiles('litert-community/two-builds', 'model.litertlm'),
+      (e: unknown) =>
+        e instanceof DownloadError &&
+        e.code === 'invalid_request' &&
+        /ambiguous/i.test(e.message) &&
+        e.message.includes("e.g. 'gpu/model.litertlm'"),
+    )
   } finally {
     stub.restore()
   }

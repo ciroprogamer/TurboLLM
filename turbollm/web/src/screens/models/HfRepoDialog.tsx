@@ -3,8 +3,10 @@
 // quant · size · fit dot · "Downloaded" tag), a live VRAM verdict line, and a
 // primary action that is "Download" (enqueue) for a remote quant or "Load" for a
 // quant already in the local library. Safetensors repos (MLX / vLLM) download as a
-// directory; .litertlm repos (LiteRT-LM) reuse the quant picker — one bundle per
-// variant. Gated repos with no token show guidance and disable downloading.
+// directory; .litertlm repos (LiteRT-LM) reuse the picker as a VARIANT picker —
+// one self-contained bundle per row (variant · precision · size, no fit signal
+// and no auto-pick: the hardware target is the user's call). Gated repos with no
+// token show guidance and disable downloading.
 //
 // The actual content is `HfRepoContent` — Sheet-free, so DiscoverTab's split-pane
 // layout can render it inline as the permanent right column. `HfRepoDialog` just
@@ -137,10 +139,21 @@ export function HfRepoContent({
   // "largest first" in that fallback used to default to the biggest/unquantized file
   // (a 1.5TB BF16 for GLM-5.2-GGUF), the least viable option, not the most. Re-runs when
   // the file list changes.
+  //
+  // .litertlm repos OPT OUT of the auto-pick: the heuristic estimates GPU VRAM fit from a
+  // GGUF's file size, but LiteRT-LM often runs on CPU and a bundle embeds its encoders, so
+  // "largest that fits" can land on a Web or SoC-specific build that has nothing to do
+  // with this machine's GPU (a small GPU would auto-pick the web bundle). The variant is
+  // a hardware choice only the user can make — the picker starts empty instead, and the
+  // selection is RESET when a new repo opens so a stale name can never carry over.
   useEffect(() => {
     if (!detail) return
     const ggufs = detail.files.filter((f) => !f.mmproj)
     if (ggufs.length === 0) return
+    if (isLitertlm) {
+      setSelected('')
+      return
+    }
     const fits = ggufs.filter((f) => fileFit(f.sizeBytes, vramMb) === 'fits')
     const pool = fits.length > 0 ? fits : ggufs
     const sizeDir = fits.length > 0 ? 1 : -1
@@ -151,7 +164,7 @@ export function HfRepoContent({
       return aK - bK
     })[0]
     setSelected(best.name)
-  }, [detail, vramMb])
+  }, [detail, vramMb, isLitertlm])
 
   // Quant options sorted by size (smallest → largest) so the listing reads in a
   // sensible progression instead of alphabetically by filename. Holds GGUF quants or
@@ -198,7 +211,24 @@ export function HfRepoContent({
       },
       {
         onSuccess: () => { toast.success(`Downloading ${selectedFile.name} on ${machine}`) },
-        onError: (e) => setRemoteDlError(describeRemoteFailure(e, machine).message),
+        onError: (e) => {
+          // Compat: an older host still enforces the .gguf-only repo-file guard, and its
+          // 400 reads back through `invalid_request` as "this is a bug in TurboLLM" —
+          // which it is not: this UI validated the name against the same extension set
+          // the CURRENT daemon accepts before sending. A non-GGUF single-file model that
+          // comes back invalid_request is that version skew, so name the fix instead.
+          if (
+            e instanceof ApiError &&
+            e.code === 'invalid_request' &&
+            !/\.gguf$/i.test(selectedFile.name)
+          ) {
+            setRemoteDlError(
+              `${machine} is running an older TurboLLM that only accepts .gguf downloads. Update TurboLLM on ${machine}, or pick a .gguf quant.`,
+            )
+            return
+          }
+          setRemoteDlError(describeRemoteFailure(e, machine).message)
+        },
       },
     )
   }
@@ -337,8 +367,11 @@ export function HfRepoContent({
             <QuantDropdown files={ggufFiles} selected={selected} onSelect={setSelected} vramMb={vramMb} />
           </div>
 
-          {/* VRAM verdict line */}
-          {selectedFile && (
+          {/* VRAM verdict line — a GGUF signal only: it estimates from the file size, and a
+              .litertlm bundle (encoders embedded, often CPU-bound under LiteRT-LM) would make
+              the dot and the sentence misleading. The picker's size column carries the file
+              size for bundles; nothing about VRAM is claimed. */}
+          {selectedFile && !isLitertlm && (
             <div className="flex items-center gap-2 rounded-md border border-border bg-panel-2 px-3 py-2.5 text-[12px]">
               <FitDot fit={fit} size={10} />
               <span className="text-muted">
@@ -421,7 +454,9 @@ export function FitDot({ fit, size = 8 }: { fit: FitVerdict; size?: number }) {
 
 /** Quant picker replacing a native `<select>`: a native `<option>` can't render a
  *  colored dot, and the fit signal (green/yellow/red) is the whole point here — so
- *  this is a real listbox (Radix DropdownMenu) instead. */
+ *  this is a real listbox (Radix DropdownMenu) instead. For `.litertlm` bundles the fit
+ *  dot is skipped: it estimates GPU VRAM from file size, and a bundle (encoders embedded,
+ *  often CPU-bound) would make it noise — the row reads variant · precision · size. */
 function QuantDropdown({
   files,
   selected,
@@ -441,9 +476,9 @@ function QuantDropdown({
       >
         {selectedFile ? (
           <span className="flex min-w-0 items-center gap-2">
-            <FitDot fit={fileFit(selectedFile.sizeBytes, vramMb)} />
+            {!selectedFile.litertlm && <FitDot fit={fileFit(selectedFile.sizeBytes, vramMb)} />}
             <span className="truncate">
-              {selectedFile.quant} · {fmtSize(selectedFile.sizeBytes)}
+              {pickerLabel(selectedFile)} · {fmtSize(selectedFile.sizeBytes)}
               {selectedFile.parts > 1 ? ` · ${selectedFile.parts} parts` : ''}
               {selectedFile.downloaded ? ' · Downloaded' : ''}
             </span>
@@ -460,9 +495,9 @@ function QuantDropdown({
         {files.map((f) => (
           <DropdownMenuItem key={f.name} onSelect={() => { track('models', 'select_hf_quant'); onSelect(f.name) }} className="justify-between gap-2">
             <span className="flex min-w-0 items-center gap-2">
-              <FitDot fit={fileFit(f.sizeBytes, vramMb)} />
+              {!f.litertlm && <FitDot fit={fileFit(f.sizeBytes, vramMb)} />}
               <span className="truncate">
-                {f.quant} · {fmtSize(f.sizeBytes)}
+                {pickerLabel(f)} · {fmtSize(f.sizeBytes)}
                 {f.parts > 1 ? ` · ${f.parts} parts` : ''}
               </span>
             </span>
@@ -476,6 +511,15 @@ function QuantDropdown({
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+/** How one row of the picker reads: a GGUF by its quant, a `.litertlm` bundle by its
+ *  hardware variant with the precision appended when the name states one (and the variant
+ *  doesn't already say it) — 'Mediatek MT6989 · Q4 · 1.0 GB', never 'MT6989 · MT6989'. */
+function pickerLabel(f: HfRepoFile): string {
+  if (!f.litertlm) return f.quant
+  const quant = f.quant !== '?' && f.quant.toLowerCase() !== (f.variant ?? '').toLowerCase() ? f.quant : null
+  return quant ? `${f.variant ?? ''} · ${quant}` : (f.variant ?? f.quant)
 }
 
 /** Rendered model card (README). A deliberately plain markdown renderer — no

@@ -2,23 +2,31 @@
 // picker (one self-contained bundle per file — gpu/web/device builds, not quants),
 // explains what a bundle is, and enqueues a single repo-file download with NO subdir —
 // the daemon's expansion path (not the safetensors component path) owns placing it.
+// The picker carries NO fit signal and NO auto-pick: both estimate GPU VRAM from a
+// GGUF's file size, and a bundle (encoders embedded, often CPU-bound under LiteRT-LM)
+// makes that noise — the hardware target is the user's call, so nothing is selected
+// until they make it.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { HfRepoContent } from './HfRepoDialog'
+import { ApiError } from '../../lib/api'
+import type { LinkSummary } from '../../lib/link-api'
 import type { HfRepoDetail, HfRepoFile } from '../../lib/types'
 
 const enqueue = vi.fn()
 const requestLoad = vi.fn()
 const toastSuccess = vi.fn()
 
-function bundle(name: string, quant: string, sizeBytes: number, sha256: string): HfRepoFile {
-  return { name, quant, sizeBytes, parts: 1, mmproj: false, litertlm: true, sha256, url: `u/${name}` }
+function bundle(name: string, variant: string, sizeBytes: number, sha256: string, quant = '?'): HfRepoFile {
+  return { name, quant, variant, sizeBytes, parts: 1, mmproj: false, litertlm: true, sha256, url: `u/${name}` }
 }
 
 // The real litert-community/gemma-4-E2B-it-litert-lm shape (verified live): one repo,
-// several device/precision variants of the same model.
+// several device/precision variants of the same model. None of these names states a
+// precision, so `quant` reads '?' — the same answer the library scanner gives the
+// downloaded file — and the variant label is the row's identity.
 const FILES = [
   bundle('gemma-4-E2B-it-gpu.litertlm', 'GPU', 2.0e9, 'sha-gpu'),
   bundle('gemma-4-E2B-it.litertlm', 'Default', 2.6e9, 'sha-base'),
@@ -60,9 +68,14 @@ vi.mock('../../lib/queries', () => ({
   useModelActions: () => ({ load: { mutate: vi.fn(), isPending: false } }),
   useSettings: () => ({ query: { data: { hfTokenSet: true } } }),
 }))
+
+// Hoisted above the consts, so the factory only closes over lazy accessors: the links
+// list and the remote-start spy are reached at call time, not at mock time.
+const remoteStart = vi.fn()
+const linkState: { links: LinkSummary[] } = { links: [] }
 vi.mock('../../lib/link-queries', () => ({
-  useLinks: () => ({ data: [] }),
-  useRemoteDownloadActions: () => ({ start: { mutate: vi.fn(), isPending: false } }),
+  useLinks: () => ({ data: linkState.links }),
+  useRemoteDownloadActions: () => ({ start: { mutate: (...a: unknown[]) => remoteStart(...a), isPending: false } }),
 }))
 vi.mock('../../lib/model-loader', () => ({
   useModelLoader: () => ({ requestLoad, isPending: false, pendingKey: undefined }),
@@ -88,14 +101,24 @@ function renderContent() {
 /** What actually got queued, as the download route sees it. */
 const queued = () => enqueue.mock.calls.map((c) => c[0])
 
+/** Open the variant picker (nothing is pre-selected for .litertlm) and choose a row. */
+async function pickVariant(label: string | RegExp) {
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole('button', { name: /Select a variant/ }))
+  await user.click(screen.getByRole('menuitem', { name: label }))
+}
+
 beforeEach(() => {
+  state.detail = repoDetail()
+  linkState.links = []
   enqueue.mockClear()
   requestLoad.mockClear()
   toastSuccess.mockClear()
+  remoteStart.mockReset()
 })
 
 describe('HfRepoContent — a .litertlm repo', () => {
-  it('labels the picker "Variant", explains the bundle format, and pre-selects the largest that fits', () => {
+  it('labels the picker "Variant", explains the bundle format, and pre-selects NOTHING', async () => {
     renderContent()
 
     expect(screen.getByText('Variant')).toBeInTheDocument()
@@ -103,31 +126,36 @@ describe('HfRepoContent — a .litertlm repo', () => {
     // The explainer must not claim every variant runs 'on CPU or GPU' — device builds
     // (Tensor G5, MediaTek) only run on their hardware. It points at matching instead.
     expect(screen.getByText(/Pick the variant matching your hardware/i)).toBeInTheDocument()
-    // 16 GB VRAM, ~15% headroom + 1 GB baseline: the 2.6 GB Default fits, the 3.1 GB G5 too,
-    // but the pre-select effect picks the LARGEST that fits (2.6 GB < 3.1 GB ≤ budget).
-    expect(screen.getByRole('button', { name: /Google Tensor G5/ })).toBeInTheDocument()
+    // The auto-pick is a GGUF heuristic (largest that fits) and a bundle's target is a
+    // hardware choice — so the picker starts on its placeholder, not on a guess that
+    // could be a Web or SoC-specific build this machine cannot even run.
+    expect(await screen.findByRole('button', { name: /Select a variant/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Google Tensor G5/ })).not.toBeInTheDocument()
   })
 
-  it('lists every bundle as its variant label with size and fit dot', async () => {
+  it('lists every bundle as variant · size with NO fit dot, and no VRAM verdict once picked', async () => {
     const user = userEvent.setup()
     renderContent()
 
-    await user.click(screen.getByRole('button', { name: /Google Tensor G5/ }))
+    await user.click(await screen.findByRole('button', { name: /Select a variant/ }))
     const items = screen.getAllByRole('menuitem')
     expect(items.map((el) => el.textContent)).toEqual(
       expect.arrayContaining(['GPU · 2.0 GB', 'Default · 2.6 GB', 'Google Tensor G5 · 3.1 GB']),
     )
+    // The fit dot estimates GPU VRAM from file size — meaningless for a bundle (encoders
+    // embedded, often CPU-bound): neither the rows nor the trigger carry one.
+    expect(document.querySelectorAll('[title*="VRAM"], [title*="fit" i]').length).toBe(0)
 
     await user.click(screen.getByRole('menuitem', { name: /Default/ }))
-    expect(screen.getByText(/2\.6 GB file · 16 GB VRAM/)).toBeInTheDocument()
+    // The VRAM verdict line is skipped the same way — the size rides in the row itself.
+    expect(screen.queryByText(/GB file ·/)).not.toBeInTheDocument()
   })
 
   it('enqueues the chosen bundle as a plain repo-file download — no subdir, size and sha carried', async () => {
     const user = userEvent.setup()
     renderContent()
 
-    await user.click(screen.getByRole('button', { name: /Google Tensor G5/ }))
-    await user.click(screen.getByRole('menuitem', { name: /^GPU/ }))
+    await pickVariant(/^GPU/)
     await user.click(screen.getByRole('button', { name: /Download/ }))
 
     expect(queued()).toEqual([
@@ -141,6 +169,19 @@ describe('HfRepoContent — a .litertlm repo', () => {
     expect(toastSuccess).toHaveBeenCalledWith('Downloading gemma-4-E2B-it-gpu.litertlm')
   })
 
+  it('reads the precision from the name beside the variant, matching the library scanner', async () => {
+    // A bundle whose name states a precision shows BOTH: the hardware variant and the
+    // precision — 'MT6989 · Q4 · 1.0 GB' — so Discover and the library (whose scanner
+    // reads quant='Q4' off the same file name) describe one file, not two.
+    state.detail = repoDetail({
+      files: [bundle('Gemma3-1B-IT_q4_ekv1280_mt6989.litertlm', 'MT6989', 1.0e9, 'sha-89', 'Q4')],
+    })
+    renderContent()
+
+    await pickVariant(/MT6989/)
+    expect(screen.getByRole('button', { name: /MT6989 · Q4 · 1\.0 GB/ })).toBeInTheDocument()
+  })
+
   it('offers Load instead of Download for a bundle already in the library', async () => {
     const user = userEvent.setup()
     state.detail = repoDetail({
@@ -152,8 +193,7 @@ describe('HfRepoContent — a .litertlm repo', () => {
     })
     renderContent()
 
-    await user.click(screen.getByRole('button', { name: /Google Tensor G5/ }))
-    await user.click(screen.getByRole('menuitem', { name: /^Default/ }))
+    await pickVariant(/^Default/)
     await user.click(screen.getByRole('button', { name: /^Load/ }))
 
     expect(requestLoad).toHaveBeenCalledWith(
@@ -161,6 +201,31 @@ describe('HfRepoContent — a .litertlm repo', () => {
       expect.anything(),
     )
     expect(enqueue).not.toHaveBeenCalled()
+  })
+})
+
+describe('HfRepoContent — a .litertlm repo over Turbo Link', () => {
+  it('names the version skew when an older host refuses a .litertlm with invalid_request', async () => {
+    // Compat: the host is a separate install on a separate release cadence, and one
+    // version behind still enforces the .gguf-only repo-file guard. Its 400 relays as
+    // invalid_request, whose generic copy reads "this is a bug in TurboLLM" — for a
+    // non-GGUF file this UI validated against the current extension set before
+    // sending, so the skew is named instead, with its fix.
+    linkState.links = [
+      { id: 'l1', name: 'workstation', status: 'online', grantedCapabilities: ['downloads:read', 'downloads:write'], lastError: null },
+    ]
+    remoteStart.mockImplementationOnce((_input: unknown, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.(new ApiError('invalid_request', "repo must be a Hugging Face 'owner/name' id and rfilename a .gguf file in it.", 400))
+    })
+    const user = userEvent.setup()
+    renderContent()
+
+    await pickVariant(/^GPU/)
+    await user.click(screen.getByTestId('download-target-trigger'))
+    await user.click(screen.getByText('workstation'))
+
+    expect(await screen.findByText(/running an older TurboLLM that only accepts \.gguf downloads/i)).toBeInTheDocument()
+    expect(screen.queryByText(/bug in TurboLLM/i)).not.toBeInTheDocument()
   })
 })
 
@@ -178,8 +243,7 @@ describe('HfRepoContent — a .litertlm repo with same-named bundles in differen
     const user = userEvent.setup()
     renderContent()
 
-    // Pre-select picks the largest that fits (1.0 GB gpu) — open the picker and choose web.
-    await user.click(screen.getByRole('button', { name: /GPU Model/ }))
+    await user.click(await screen.findByRole('button', { name: /Select a variant/ }))
     expect(screen.getAllByRole('menuitem').map((el) => el.textContent)).toEqual(
       expect.arrayContaining(['WEB Model · 800 MB', 'GPU Model · 1.0 GB']),
     )

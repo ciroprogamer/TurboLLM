@@ -2650,11 +2650,11 @@ export function registerApi(app: Hono, d: Deps): void {
   // wildcard tail. Each file is annotated `downloaded` + `localKey` so the SAME
   // model+quant from a different repo is correctly NOT marked downloaded. Two
   // signals (spec 10 §3): (1) download provenance for files pulled via TurboLLM
-  // (sha256 exact, or repo+basename-filename when no hash is known); (2) for
-  // imported / pre-existing files with no provenance, a content sha256 match —
-  // computed lazily and only for a local file whose byte size exactly matches a
-  // repo file (so we almost never hash). While a hash is still being computed the
-  // response carries `verifying:true` and the UI re-polls until the badge resolves.
+  // (sha256 exact, or repo+filename); (2) for imported / pre-existing files with
+  // no provenance, a content sha256 match — computed lazily and only for a local file
+  // whose byte size exactly matches a repo file (so we almost never hash). While a
+  // hash is still being computed the response carries `verifying:true` and the UI
+  // re-polls until the badge resolves.
   app.get('/api/v1/hf/models/:owner/:name', async (c) => {
     const repo = `${c.req.param('owner')}/${c.req.param('name')}`
     try {
@@ -2671,20 +2671,21 @@ export function registerApi(app: Hono, d: Deps): void {
       let verifying = false
       const files = detail.files.map((f) => {
         // 1) Provenance: downloaded via TurboLLM. sha256 is the identity key; the
-        //    (repo, filename) fallback applies only when a hash is missing on either
-        //    side — with both present, a name match proves nothing (a re-upload is a
-        //    different file, exactly like a different repo's requant). The provenance
-        //    `filename` is always a BASENAME (downloads.ts records the destination
-        //    filename), while a repo that ships same-named bundles in different
-        //    subfolders lists them by full path — compare on the basename so those
-        //    rows resolve too. Without a hash that basename cannot tell colliding
-        //    bundles apart (the same tradeoff checkpoints accept for identical
-        //    model.safetensors names); single-file models are LFS, so they carry a
-        //    sha and the identity key disambiguates in practice.
+        //    (repo, filename) name fallback is UNCONDITIONAL, exactly as it was before
+        //    .litertlm support — a re-uploaded quant (new LFS oid, same name — requant
+        //    fixes do this a lot) keeps its "Downloaded"/Load badge, and a split GGUF
+        //    (never sha-checked: step 2 is gated on parts === 1) keeps its name match
+        //    too. The one change this PR makes here is comparing on the BASENAME:
+        //    provenance `filename` is always one (downloads.ts records the destination
+        //    filename), while a repo that disambiguates same-named bundles across
+        //    subfolders lists them by full path. A basename therefore cannot tell
+        //    colliding bundles apart — the same tradeoff checkpoints accept for
+        //    identical model.safetensors names; single-file models are LFS, so the
+        //    sha256 key disambiguates in practice.
         const pmatch = prov.find(
           (p) =>
             (!!p.sha256 && !!f.sha256 && p.sha256 === f.sha256) ||
-            (!(p.sha256 && f.sha256) && p.repo === repo && p.filename === basename(f.name)),
+            (p.repo === repo && p.filename === basename(f.name)),
         )
         let local = pmatch ? models.find((m) => m.path === pmatch.dest) : undefined
 

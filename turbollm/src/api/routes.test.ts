@@ -318,8 +318,11 @@ test('a GGUF repo detail (no checkpoints) comes back exactly as before', async (
 // The files overlay's provenance fallback: `filename` is always a BASENAME (downloads.ts
 // records the destination filename), while a repo that disambiguates same-named bundles
 // across subfolders lists them by FULL path (hf.ts litertlmFiles) — the fallback must
-// compare on the basename, and must yield to sha256 whenever both sides have one.
-test('provenance filename fallback matches on basename and yields to sha256', async () => {
+// compare on the basename. The fallback itself stays UNCONDITIONAL (name matches even
+// when both sides carry a sha), exactly as it was before .litertlm support: a re-uploaded
+// quant (new LFS oid, same name) keeps its "Downloaded" badge, and gating it on the sha
+// presence would silently change GGUF behaviour — not this PR's business.
+test('provenance filename fallback matches on basename, unconditionally', async () => {
   const bundle = (name: string, sha: string) => ({ name, quant: 'GPU', sizeBytes: 5, parts: 1, mmproj: false, litertlm: true, sha256: sha, url: 'u' })
   const detail = {
     repo: 'litert-community/x-litert-lm', gated: false, license: '', downloads: 0, likes: 0, card: '',
@@ -337,12 +340,14 @@ test('provenance filename fallback matches on basename and yields to sha256', as
   let files = await repoDetailFiles(detail, noHash, models)
   assert.deepEqual(files.map((f) => f.downloaded), [true, true])
 
-  // Both hashes known: a basename match must not rescue a sha mismatch — only the
-  // exact bundle is Downloaded (a re-upload is a different file, same as a different
-  // repo's requant).
+  // Both hashes known: the name fallback still applies — the sha-gated version of this
+  // flipped a re-uploaded quant's row back to "Download" (new LFS oid, same name), and
+  // clicking it overwrote the same dest file; split GGUFs, which can never sha-check
+  // (step 2 is gated on parts === 1), just lost their badge. So a basename match keeps
+  // the row Downloaded regardless of the hashes, as it always did.
   const withHash = [{ repo: 'litert-community/x-litert-lm', filename: 'model.litertlm', sha256: 'sha-gpu', dest, at: '' }]
   files = await repoDetailFiles(detail, withHash, models)
-  assert.deepEqual(files.map((f) => f.downloaded), [true, false])
+  assert.deepEqual(files.map((f) => f.downloaded), [true, true])
 
   // A basename-listed GGUF with no hash on either side keeps matching by name, as before.
   const ggufDetail = {

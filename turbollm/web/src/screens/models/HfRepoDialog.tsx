@@ -13,7 +13,7 @@
 // wraps it in the Sheet chrome for the one other call site (ModelsScreen's Library
 // tab "View HF page" hand-off), which has no split-pane of its own.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -145,13 +145,21 @@ export function HfRepoContent({
   // "largest that fits" can land on a Web or SoC-specific build that has nothing to do
   // with this machine's GPU (a small GPU would auto-pick the web bundle). The variant is
   // a hardware choice only the user can make — the picker starts empty instead, and the
-  // selection is RESET when a new repo opens so a stale name can never carry over.
+  // selection is RESET when a different repo opens so a stale name can never carry over —
+  // and ONLY then: `detail` gets a fresh reference on every verifying poll (1.5s) and every
+  // window-focus refetch, so resetting on each run would clear a variant the user already
+  // picked (e.g. once starting a download flips the badges). `lastRepo` tracks which repo
+  // the current selection belongs to; it is updated for every repo, GGUF ones included, so
+  // returning to a bundle repo after a GGUF one still resets.
+  const lastRepo = useRef<string | null>(null)
   useEffect(() => {
     if (!detail) return
+    const repoChanged = lastRepo.current !== detail.repo
+    lastRepo.current = detail.repo
     const ggufs = detail.files.filter((f) => !f.mmproj)
     if (ggufs.length === 0) return
     if (isLitertlm) {
-      setSelected('')
+      if (repoChanged) setSelected('')
       return
     }
     const fits = ggufs.filter((f) => fileFit(f.sizeBytes, vramMb) === 'fits')
@@ -217,11 +225,10 @@ export function HfRepoContent({
           // which it is not: this UI validated the name against the same extension set
           // the CURRENT daemon accepts before sending. A non-GGUF single-file model that
           // comes back invalid_request is that version skew, so name the fix instead.
-          if (
-            e instanceof ApiError &&
-            e.code === 'invalid_request' &&
-            !/\.gguf$/i.test(selectedFile.name)
-          ) {
+          // invalid_request is also what an UP-TO-DATE host answers for an ambiguous bundle
+          // name or a bad repo id, so the code alone is not enough: only the old guard's own
+          // wording (isOldGgufOnlyRefusal) counts as skew; everything else keeps the generic copy.
+          if (e instanceof ApiError && !/\.gguf$/i.test(selectedFile.name) && isOldGgufOnlyRefusal(e)) {
             setRemoteDlError(
               `${machine} is running an older TurboLLM that only accepts .gguf downloads. Update TurboLLM on ${machine}, or pick a .gguf quant.`,
             )
@@ -511,6 +518,15 @@ function QuantDropdown({
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+/** True when `e` is the refusal an OLDER Turbo Link host gives a non-GGUF single-file
+ *  download: `invalid_request` with the old guard's wording ("…rfilename a .gguf file in
+ *  it."). A current host words the same check ".gguf or .litertlm model file", and its other
+ *  invalid_request causes (ambiguous bundle name, malformed repo id) say something else
+ *  again — none of those may be reported as "update TurboLLM". */
+export function isOldGgufOnlyRefusal(e: ApiError): boolean {
+  return e.code === 'invalid_request' && /rfilename a \.gguf file in it/i.test(e.message) && !/litertlm/i.test(e.message)
 }
 
 /** How one row of the picker reads: a GGUF by its quant, a `.litertlm` bundle by its

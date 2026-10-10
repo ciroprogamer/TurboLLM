@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { HfRepoContent } from './HfRepoDialog'
+import { HfRepoContent, isOldGgufOnlyRefusal } from './HfRepoDialog'
 import { ApiError } from '../../lib/api'
 import type { LinkSummary } from '../../lib/link-api'
 import type { HfRepoDetail, HfRepoFile } from '../../lib/types'
@@ -226,6 +226,72 @@ describe('HfRepoContent — a .litertlm repo over Turbo Link', () => {
 
     expect(await screen.findByText(/running an older TurboLLM that only accepts \.gguf downloads/i)).toBeInTheDocument()
     expect(screen.queryByText(/bug in TurboLLM/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('HfRepoContent — only the old guard\'s own refusal reads as version skew', () => {
+  // The code alone is not enough: an UP-TO-DATE host also answers invalid_request for an
+  // ambiguous bundle name or a malformed repo id, and neither of those is "update TurboLLM".
+  const fail = async (message: string) => {
+    linkState.links = [
+      { id: 'l1', name: 'workstation', status: 'online', grantedCapabilities: ['downloads:read', 'downloads:write'], lastError: null },
+    ]
+    remoteStart.mockImplementationOnce((_input: unknown, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.(new ApiError('invalid_request', message, 400))
+    })
+    const user = userEvent.setup()
+    renderContent()
+    await pickVariant(/^GPU/)
+    await user.click(screen.getByTestId('download-target-trigger'))
+    await user.click(screen.getByText('workstation'))
+  }
+
+  it('keeps the generic copy for an ambiguous-name rejection from a current host', async () => {
+    await fail("Ambiguous '.litertlm' name 'model.litertlm' — this repo has 2 bundles with that filename. Pass the full repo path (e.g. 'gpu/model.litertlm').")
+    expect(await screen.findByText(/bug in TurboLLM/i)).toBeInTheDocument()
+    expect(screen.queryByText(/older TurboLLM/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the generic copy for a malformed repo id / file from a current host', async () => {
+    await fail("repo must be a Hugging Face 'owner/name' id and rfilename a .gguf or .litertlm model file in it.")
+    expect(await screen.findByText(/bug in TurboLLM/i)).toBeInTheDocument()
+    expect(screen.queryByText(/older TurboLLM/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('isOldGgufOnlyRefusal', () => {
+  it('matches only the old guard\'s wording', () => {
+    expect(isOldGgufOnlyRefusal(new ApiError('invalid_request', "repo must be a Hugging Face 'owner/name' id and rfilename a .gguf file in it.", 400))).toBe(true)
+    expect(isOldGgufOnlyRefusal(new ApiError('invalid_request', 'rfilename a .gguf or .litertlm model file in it.', 400))).toBe(false)
+    expect(isOldGgufOnlyRefusal(new ApiError('invalid_request', 'something else', 400))).toBe(false)
+    expect(isOldGgufOnlyRefusal(new ApiError('internal', 'rfilename a .gguf file in it', 500))).toBe(false)
+  })
+})
+
+describe('HfRepoContent — the variant selection survives a refetch of the same repo', () => {
+  it('keeps a picked variant when `detail` gets a new reference, and resets for a different repo', async () => {
+    // `detail` is a fresh object on every verifying poll (1.5s) and window-focus refetch.
+    // The selection must not be cleared by those — only by opening a different repo.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const tree = (onClose: () => void) => (
+      <QueryClientProvider client={qc}>
+        <HfRepoContent repo="litert-community/gemma-4-E2B-it-litert-lm" onClose={onClose} />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(tree(vi.fn()))
+    await pickVariant(/^GPU/)
+    expect(screen.getByRole('button', { name: /^GPU · / })).toBeInTheDocument()
+
+    // Same repo, new reference (the badges flipped after a poll).
+    state.detail = repoDetail({ files: FILES.map((f) => ({ ...f })) })
+    rerender(tree(vi.fn()))
+    expect(screen.getByRole('button', { name: /^GPU · / })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Select a variant/ })).not.toBeInTheDocument()
+
+    // A DIFFERENT repo opens: a stale name must not carry over.
+    state.detail = repoDetail({ repo: 'litert-community/other-litert-lm', files: FILES.map((f) => ({ ...f })) })
+    rerender(tree(vi.fn()))
+    expect(await screen.findByRole('button', { name: /Select a variant/ })).toBeInTheDocument()
   })
 })
 

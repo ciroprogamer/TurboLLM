@@ -706,6 +706,12 @@ function readKfdNodes(): KfdGpuNode[] {
 function getCpuModel(): string {
   const model = os.cpus()[0]?.model?.trim()
   if (model && model.length > 0) return model
+  if (process.platform === 'android') {
+    // arm64 /proc/cpuinfo names no SoC, and apps may not read it at all. The app passes Build.SOC_MODEL; Termux
+    // has getprop. Both give e.g. "Google Tensor G4".
+    const soc = androidSocName()
+    if (soc) return soc
+  }
   // Android /proc/cpuinfo usually has a "Hardware" or "model name" line.
   // Note: Node reports `process.platform === 'android'` on Termux/Android — distinct
   // from 'linux' (see NodeJS.Platform type) — so we must include it here, otherwise
@@ -781,8 +787,43 @@ export function availableMemBytes(meminfo?: string): number {
   return os.freemem()
 }
 
+function androidSocName(): string {
+  const fromApp = process.env.TURBOLLM_ANDROID_SOC?.trim()
+  if (fromApp) return fromApp
+  const prop = (name: string): string => {
+    try {
+      return execFileSync('getprop', [name], { timeout: 2000 }).toString().trim()
+    } catch {
+      return ''
+    }
+  }
+  const model = prop('ro.soc.model')
+  if (!model) return ''
+  const maker = prop('ro.soc.manufacturer')
+  return maker && !model.toLowerCase().startsWith(maker.toLowerCase()) ? `${maker} ${model}` : model
+}
+
+/** The CPUs the kernel knows ("0-7"), counted. `nproc` and os.cpus() count only the CPUs this process may run on,
+ *  and an Android app's cpuset leaves some out, so the phone showed 7 cores instead of 8. */
+export function countCpuList(list: string): number {
+  let n = 0
+  for (const part of list.trim().split(',')) {
+    const m = part.match(/^(\d+)(?:-(\d+))?$/)
+    if (m) n += m[2] ? Number(m[2]) - Number(m[1]) + 1 : 1
+  }
+  return n
+}
+
 /** Android/Termux fallback for CPU core count, as os.cpus() often reports 1 due to cgroups. */
 function getCpuCoreCount(): number {
+  if (process.platform === 'android') {
+    try {
+      const n = countCpuList(fs.readFileSync('/sys/devices/system/cpu/possible', 'utf8'))
+      if (n > 0) return n
+    } catch {
+      /* fall through */
+    }
+  }
   const cpus = os.cpus()
   if (cpus.length > 1) return cpus.length
   // Fallback 1: nproc (available in Termux)

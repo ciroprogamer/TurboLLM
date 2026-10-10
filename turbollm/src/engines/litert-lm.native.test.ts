@@ -76,12 +76,12 @@ test('engineForModel: a .litertlm model goes to the LiteRT-LM engine while anoth
   const llama = engine({ id: 'llama', kind: 'llama-server' })
   const litert = engine({ id: 'litert', kind: 'litert-lm', binPath: '/lib/liblitertlm_server.so' })
   const reg = registry([llama, litert], 'llama')
-  assert.equal(engineForModel(reg, { laya: false, format: 'litertlm' })?.id, 'litert')
-  assert.equal(engineForModel(reg, { laya: false, format: 'gguf' })?.id, 'llama')
+  assert.equal(engineForModel(reg, { format: 'litertlm' })?.id, 'litert')
+  assert.equal(engineForModel(reg, { format: 'gguf' })?.id, 'llama')
   // No LiteRT-LM engine registered: the active one is still returned, and compat reports the mismatch as before.
-  assert.equal(engineForModel(registry([llama], 'llama'), { laya: false, format: 'litertlm' })?.id, 'llama')
+  assert.equal(engineForModel(registry([llama], 'llama'), { format: 'litertlm' })?.id, 'llama')
   // An active LiteRT-LM engine is used as-is.
-  assert.equal(engineForModel(registry([llama, litert], 'litert'), { laya: false, format: 'litertlm' })?.id, 'litert')
+  assert.equal(engineForModel(registry([llama, litert], 'litert'), { format: 'litertlm' })?.id, 'litert')
 })
 
 test('repairBinPath: a non-llama engine is re-pointed without a llama-server probe', async () => {

@@ -130,6 +130,7 @@ export function catalogIdFor(e: Engine): string {
   if (e.kind === 'vllm') return 'vllm'
   if (e.kind === 'koboldcpp') return 'koboldcpp'
   if (e.kind === 'llamafile') return 'llamafile'
+  if (e.kind === 'litert-lm') return 'litert-lm'
   const repo = repoSlug(e.sourceRepo)
   if (repo === 'atomicbot-ai/atomic-llama-cpp-turboquant') return 'turboquant'
   if (repo === 'ikawrakow/ik_llama.cpp') return 'ik_llama.cpp'
@@ -567,7 +568,7 @@ function EngineGalleryTab() {
             screen="engines"
           />
         ) : sys?.bundledEnginesOnly ? (
-          <BundledEnginesNote />
+          <BundledEngineGallery list={list} activeEngine={activeEngine} />
         ) : (
           <EngineGallery
             rec={recQ.data}
@@ -1848,16 +1849,142 @@ function CatalogUpdateStatusLine({ st, repoUrl }: { st: EngineUpdateStatus | und
  *  sentence rather than a card with a disabled button: the point is that there is nothing to do
  *  here, and a greyed-out "Install" would only invite tapping (ADR-239 — no placeholder entries
  *  that cannot act). It says where the engines came from so the screen doesn't read as broken. */
-function BundledEnginesNote() {
+/** The packaged Android app's gallery: one card per engine that ships inside the APK, with the same curated copy the
+ *  desktop/Termux gallery shows (ENGINE_META) — what it is, what it runs, its trade-offs — plus whether it is active
+ *  and a button to make it so. No install/update/build controls: the app may only execute code installed with it
+ *  (W^X), so these engines are updated by updating the app. Termux keeps the full gallery (see Zone 2's comment). */
+function BundledEngineGallery({ list, activeEngine }: { list: EnginesList | undefined; activeEngine: Engine | null }) {
+  const mut = useEngineMutations()
+  const { data: status } = useStatus()
+  const engines = (list?.engines ?? []).filter((e) => e.kind !== 'laya')
+  const running = status?.engine.state === 'running' || status?.engine.state === 'starting'
+
+  const use = (e: Engine) => {
+    track('engines', 'switch_engine')
+    mut.activate.mutate(e.id, {
+      onError: (err) => toast.error(err instanceof ApiError ? err.message : 'Could not switch engine.'),
+    })
+  }
+
   return (
-    <section className="flex flex-col gap-2">
-      <SectionLabel>Engines</SectionLabel>
-      <p className="rounded-xl border border-border bg-panel px-4 py-3 text-[13px] text-muted">
-        The engines below ship inside the app and are ready to use — pick one above. Android only
-        lets an app run code that was installed with it, so engines can&apos;t be downloaded or
-        built here the way they can on a computer.
+    <section className="flex flex-col gap-3">
+      <SectionLabel>Built into the app</SectionLabel>
+      <p className="text-[13px] text-muted">
+        These engines ship inside the app and update when the app updates. Android only lets an app run code that was
+        installed with it, so engines can&apos;t be downloaded or built here the way they can on a computer or in Termux.
       </p>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {engines.map((e) => (
+          <BundledEngineCard
+            key={e.id}
+            engine={e}
+            isActive={e.id === activeEngine?.id}
+            isRunning={e.id === activeEngine?.id && running}
+            busy={mut.activate.isPending}
+            onUse={() => use(e)}
+          />
+        ))}
+      </div>
     </section>
+  )
+}
+
+/** Display names for the engines the Android app registers itself (turbollm engines/seed.ts). */
+const BUNDLED_ENGINE_TITLES: Record<string, { title: string; detail: string }> = {
+  'llama-server-android': { title: 'llama.cpp', detail: 'CPU' },
+  'llama-server-android-vulkan': { title: 'llama.cpp', detail: 'Vulkan GPU' },
+  'litert-lm-android': { title: 'LiteRT-LM', detail: 'CPU · GPU' },
+}
+
+function BundledEngineCard({
+  engine: e,
+  isActive,
+  isRunning,
+  busy,
+  onUse,
+}: {
+  engine: Engine
+  isActive: boolean
+  isRunning: boolean
+  busy: boolean
+  onUse: () => void
+}) {
+  const meta = ENGINE_META[catalogIdFor(e)]
+  const Icon = meta?.icon ?? Boxes
+  const names = BUNDLED_ENGINE_TITLES[e.name] ?? { title: e.name, detail: '' }
+  // Copy written for desktop/Termux installs that has no meaning inside the app (installing Python, CUDA, …).
+  const cons = (meta?.cons ?? []).filter((c) => !/termux|python|cuda|install/i.test(c))
+  const pros = meta?.pros ?? []
+  const isLitert = e.kind === 'litert-lm'
+
+  return (
+    <div className="flex flex-col rounded-xl border border-border bg-panel p-4">
+      <div className="flex items-start gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-panel-2 text-muted">
+          <Icon size={18} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm font-semibold text-ink">{names.title}</span>
+            {names.detail && <span className="text-[12px] text-muted">{names.detail}</span>}
+            {isActive && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium" style={{ color: 'var(--ok)' }}>
+                <Check size={11} /> {isRunning ? 'Running' : 'Active'}
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 text-[12px] text-muted">{meta?.tagline ?? e.name}</div>
+        </div>
+        <Badge variant="mono">Built in</Badge>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {meta?.format && <AttrChip icon={<Package size={11} />}>{meta.format}</AttrChip>}
+        {e.version && <AttrChip icon={<Cpu size={11} />}>{e.version}</AttrChip>}
+      </div>
+
+      {(pros.length > 0 || cons.length > 0) && (
+        <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+          <div>
+            <div className="text-[11px] font-semibold" style={{ color: 'var(--ok)' }}>Pros</div>
+            <ul className="mt-1.5 flex flex-col gap-1.5">
+              {pros.map((p, i) => (
+                <li key={i} className="flex gap-1.5 text-[12px] leading-snug text-ink">
+                  <Check size={13} className="mt-px shrink-0" style={{ color: 'var(--ok)' }} />
+                  <span>{p}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold" style={{ color: 'var(--warn)' }}>Cons</div>
+            <ul className="mt-1.5 flex flex-col gap-1.5">
+              {cons.map((c, i) => (
+                <li key={i} className="flex gap-1.5 text-[12px] leading-snug text-ink">
+                  <Minus size={13} className="mt-px shrink-0" style={{ color: 'var(--warn)' }} />
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
+        <span className="text-[11px] text-muted">
+          {isLitert ? '.litertlm models load on it automatically' : 'Updates with the app'}
+        </span>
+        {isActive ? (
+          <Button size="sm" variant="outline" disabled>
+            In use
+          </Button>
+        ) : (
+          <Button size="sm" disabled={busy} onClick={onUse}>
+            Use
+          </Button>
+        )}
+      </div>
+    </div>
   )
 }
 

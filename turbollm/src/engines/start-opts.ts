@@ -86,7 +86,11 @@ function buildLitertLmStartOpts({ entry, engine, cfg, sys, overrides, trigger }:
   // LiteRT-LM: a single-file .litertlm bundle. Backend (cpu/gpu), context and threads reach the server through its
   // --config file (litertLmProfileToConfig); the model path itself travels in each request, not on the command line.
   const saved = getModelProfile(cfg, entry.key, engine.id) as Partial<LoadProfile> | undefined
-  const profile = resolveProfile(entry, sys, saved, overrides, cfg.modelDefaults)
+  const resolved = resolveProfile(entry, sys, saved, overrides, cfg.modelDefaults)
+  // The runtime clamps max_num_tokens to the bundle's KV-cache size anyway. Clamping here as well keeps the context
+  // TurboLLM reports and compacts against the real one, not a slider value the bundle never had (a saved 128k on a
+  // 4096-token export).
+  const profile = entry.nativeCtx > 0 && resolved.ctx > entry.nativeCtx ? { ...resolved, ctx: entry.nativeCtx } : resolved
   return {
     engine,
     model: { key: entry.key, name: entry.name, quant: entry.quant, ctx: profile.ctx, vision: false },

@@ -317,12 +317,10 @@ test('a GGUF repo detail (no checkpoints) comes back exactly as before', async (
 
 // The files overlay's provenance fallback: `filename` is always a BASENAME (downloads.ts
 // records the destination filename), while a repo that disambiguates same-named bundles
-// across subfolders lists them by FULL path (hf.ts litertlmFiles) — the fallback must
-// compare on the basename. The fallback itself stays UNCONDITIONAL (name matches even
-// when both sides carry a sha), exactly as it was before .litertlm support: a re-uploaded
-// quant (new LFS oid, same name) keeps its "Downloaded" badge, and gating it on the sha
-// presence would silently change GGUF behaviour — not this PR's business.
-test('provenance filename fallback matches on basename, unconditionally', async () => {
+// across subfolders lists them by FULL path (hf.ts litertlmFiles). Rows listed by basename
+// keep the legacy unconditional name match; full-path rows compare on the basename but
+// yield to sha256 whenever both sides have one.
+test('provenance fallback: unconditional by name, sha256 decides for full-path rows', async () => {
   const bundle = (name: string, sha: string) => ({ name, quant: 'GPU', sizeBytes: 5, parts: 1, mmproj: false, litertlm: true, sha256: sha, url: 'u' })
   const detail = {
     repo: 'litert-community/x-litert-lm', gated: false, license: '', downloads: 0, likes: 0, card: '',
@@ -334,20 +332,36 @@ test('provenance filename fallback matches on basename, unconditionally', async 
 
   // No provenance hash: the basename fallback resolves the full-path rows (both share
   // the basename — the imprecision checkpoints already accept for identical
-  // model.safetensors names; bundles are LFS, so the sha256 key disambiguates in
-  // practice).
+  // model.safetensors names).
   const noHash = [{ repo: 'litert-community/x-litert-lm', filename: 'model.litertlm', dest, at: '' }]
   let files = await repoDetailFiles(detail, noHash, models)
   assert.deepEqual(files.map((f) => f.downloaded), [true, true])
 
-  // Both hashes known: the name fallback still applies — the sha-gated version of this
-  // flipped a re-uploaded quant's row back to "Download" (new LFS oid, same name), and
-  // clicking it overwrote the same dest file; split GGUFs, which can never sha-check
-  // (step 2 is gated on parts === 1), just lost their badge. So a basename match keeps
-  // the row Downloaded regardless of the hashes, as it always did.
+  // Both hashes known: only the exact bundle is Downloaded — the sibling variant must
+  // not be marked by its basename alone.
   const withHash = [{ repo: 'litert-community/x-litert-lm', filename: 'model.litertlm', sha256: 'sha-gpu', dest, at: '' }]
   files = await repoDetailFiles(detail, withHash, models)
-  assert.deepEqual(files.map((f) => f.downloaded), [true, true])
+  assert.deepEqual(files.map((f) => f.downloaded), [true, false])
+
+  // A basename-listed bundle keeps the legacy unconditional name match: a re-upload
+  // (new LFS oid, same name) stays Downloaded.
+  const flat = { ...detail, files: [bundle('model.litertlm', 'sha-new')] }
+  files = await repoDetailFiles(flat, [{ ...withHash[0], sha256: 'sha-old' }], models)
+  assert.deepEqual(files.map((f) => f.downloaded), [true])
+
+  // Same for a GGUF whose repo re-uploaded it: both hashes known and different, the
+  // row stays Downloaded by name, exactly as before this PR.
+  const reupload = {
+    repo: 'bartowski/Qwen3-8B-GGUF', gated: false, license: '', downloads: 0, likes: 0, card: '',
+    files: [{ name: 'qwen3-8b-Q4_K_M.gguf', quant: 'Q4_K_M', sizeBytes: 4, parts: 1, mmproj: false, sha256: 'new', url: 'u' }],
+  }
+  const reDest = join('D:', 'models', 'bartowski', 'Qwen3-8B-GGUF', 'qwen3-8b-Q4_K_M.gguf')
+  files = await repoDetailFiles(
+    reupload,
+    [{ repo: 'bartowski/Qwen3-8B-GGUF', filename: 'qwen3-8b-Q4_K_M.gguf', sha256: 'old', dest: reDest, at: '' }],
+    [entry({ key: 'gguf-key', path: reDest })],
+  )
+  assert.deepEqual(files.map((f) => f.downloaded), [true])
 
   // A basename-listed GGUF with no hash on either side keeps matching by name, as before.
   const ggufDetail = {

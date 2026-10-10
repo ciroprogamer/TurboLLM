@@ -2670,23 +2670,26 @@ export function registerApi(app: Hono, d: Deps): void {
 
       let verifying = false
       const files = detail.files.map((f) => {
-        // 1) Provenance: downloaded via TurboLLM. sha256 is the identity key; the
-        //    (repo, filename) name fallback is UNCONDITIONAL, exactly as it was before
-        //    .litertlm support — a re-uploaded quant (new LFS oid, same name — requant
-        //    fixes do this a lot) keeps its "Downloaded"/Load badge, and a split GGUF
-        //    (never sha-checked: step 2 is gated on parts === 1) keeps its name match
-        //    too. The one change this PR makes here is comparing on the BASENAME:
-        //    provenance `filename` is always one (downloads.ts records the destination
-        //    filename), while a repo that disambiguates same-named bundles across
-        //    subfolders lists them by full path. A basename therefore cannot tell
-        //    colliding bundles apart — the same tradeoff checkpoints accept for
-        //    identical model.safetensors names; single-file models are LFS, so the
-        //    sha256 key disambiguates in practice.
-        const pmatch = prov.find(
-          (p) =>
-            (!!p.sha256 && !!f.sha256 && p.sha256 === f.sha256) ||
-            (p.repo === repo && p.filename === basename(f.name)),
-        )
+        // 1) Provenance: downloaded via TurboLLM. sha256 is the exact-identity key. The
+        //    (repo, filename) name fallback is UNCONDITIONAL for every row listed by its
+        //    basename — exactly as before .litertlm support — so a re-uploaded quant
+        //    (new LFS oid, same name: requant fixes do this a lot) keeps its
+        //    "Downloaded"/Load badge, and a split GGUF (never sha-checked: step 2 is gated
+        //    on parts === 1) keeps its name match too.
+        //    The one exception is a row listed by FULL PATH: hf.ts lists same-named
+        //    bundles from different subfolders that way ('gpu/model.litertlm' vs
+        //    'web/model.litertlm'), and provenance `filename` is always a basename
+        //    (downloads.ts records the destination filename), so the basename is the
+        //    only thing the two can be compared on — and it cannot tell them apart. For
+        //    those rows the name match applies only while a hash is missing on either
+        //    side; once both are known sha256 decides, so a sibling variant is never
+        //    marked Downloaded by name alone.
+        const listedByPath = f.name !== basename(f.name)
+        const pmatch = prov.find((p) => {
+          if (!!p.sha256 && !!f.sha256 && p.sha256 === f.sha256) return true
+          if (p.repo !== repo) return false
+          return listedByPath ? !(p.sha256 && f.sha256) && p.filename === basename(f.name) : p.filename === f.name
+        })
         let local = pmatch ? models.find((m) => m.path === pmatch.dest) : undefined
 
         // 2) Content hash: imported / pre-existing files with no provenance. Gated

@@ -5,6 +5,7 @@
 // them to a stable error envelope.
 import { quantFromName } from '../gguf/gguf'
 import { detectJev } from '../models/jev'
+import { isLitertlmFileName, litertlmQuantFromName } from '../models/litertlm'
 import type { TextClassifierRuntime } from '../models/text-classifier'
 import { findCheckpoints, MAX_CHECKPOINT_CONFIG_FETCHES, type HfCheckpoint } from './checkpoints'
 import { isLayaEngineRepo, isLayaRepo, isOtherRuntimePort, layaRepoFiles } from './laya-repo'
@@ -66,7 +67,9 @@ const SORT_PARAM: Record<Exclude<HfSortOption, 'best-match'>, string> = {
  *  Shared by `searchModels` and `browseModels` so the two never drift apart. */
 function libraryFilterFor(engineKind?: string): string {
   if (engineKind === 'mlx' || engineKind === 'rapid-mlx' || engineKind === 'mlx-vlm') return 'filter=mlx&'
-  if (engineKind === 'vllm') return ''
+  // LiteRT-LM bundles are single .litertlm files that carry no `gguf` library tag, so a gguf filter would hide every
+  // one of them; search unfiltered, as for vLLM. Repo detail then lists the .litertlm files (getRepo).
+  if (engineKind === 'vllm' || engineKind === 'litert-lm') return ''
   return 'filter=gguf&'
 }
 
@@ -206,6 +209,7 @@ export class HfClient {
 
     const ggufEntries = tree.filter((e) => e.type === 'file' && /\.gguf$/i.test(e.path))
     const safetensorsEntries = tree.filter((e) => e.type === 'file' && /\.safetensors$/i.test(e.path))
+    const litertlmEntries = tree.filter((e) => e.type === 'file' && isLitertlmFileName(e.path))
 
     // Safetensors repo (MLX or vLLM): has safetensors weights but no GGUFs.
     const isSafetensors = ggufEntries.length === 0 && safetensorsEntries.length > 0
@@ -245,6 +249,18 @@ export class HfClient {
       // flatten a multi-checkpoint repo into one folder and have its checkpoints overwrite
       // each other. The checkpoint rows are additive, and each downloads only its own files.
       checkpoints = await this.withJevBadges(repo, findCheckpoints(repo, tree, (path) => this.fileUrl(repo, path)))
+    } else if (ggufEntries.length === 0 && litertlmEntries.length > 0) {
+      // A LiteRT-LM repo (litert-community/…): every .litertlm is one complete, single-file model — no split
+      // parts and no projector — so each is its own entry, downloaded as-is (expandModelFiles).
+      files = litertlmEntries.map((e) => ({
+        name: base(e.path),
+        quant: litertlmQuantFromName(base(e.path)),
+        sizeBytes: sizeOf(e),
+        parts: 1,
+        mmproj: false,
+        sha256: e.lfs?.oid,
+        url: this.fileUrl(repo, e.path),
+      }))
     } else {
       files = groupFiles(repo, ggufEntries)
     }
@@ -310,6 +326,14 @@ export class HfClient {
       return { dir: dirOf(rfilename), files: [{ rfilename, size: 0, mmproj: wantBase.includes('mmproj') }] }
     }
     const ggufs = tree.filter((e) => e.type === 'file' && /\.gguf$/i.test(e.path))
+
+    // A .litertlm is a whole model in one file: fetch exactly it, with no shards or projector to pair.
+    if (isLitertlmFileName(wantBase)) {
+      const bundle = tree.find((e) => e.type === 'file' && base(e.path).toLowerCase() === wantBase)
+      return bundle
+        ? { dir: dirOf(bundle.path), files: [{ rfilename: bundle.path, size: sizeOf(bundle), sha256: bundle.lfs?.oid, mmproj: false }] }
+        : { dir: dirOf(rfilename), files: [{ rfilename, size: 0, mmproj: false }] }
+    }
 
     // Locate the chosen file by basename (the UI carries a split group's first-shard
     // basename; the tree recovers its full repo path + siblings).

@@ -15,6 +15,7 @@
 // the tests exercise directly; checkUpdate/the scheduler are thin shells over them.
 
 import type { Engine } from '../config/config'
+import { isNativeLitertLm } from './litert-lm'
 import { type BackendId, GithubRateLimitError, latestBuildTagRelease, latestCommitSha, latestReleaseTag } from './download'
 
 // ─── Layer 1a: version/tag comparison (pure) ─────────────────────────────────
@@ -245,6 +246,8 @@ export function resolveUpdateSource(engine: Engine): ResolvedSource | null {
   if (engine.kind === 'mlx-vlm') return { source: 'pip', ref: 'mlx-vlm', installed: versionFromPipString(engine.version) }
   if (engine.kind === 'vllm') return { source: 'pip', ref: 'vllm', installed: versionFromPipString(engine.version) }
   if (engine.kind === 'sglang') return { source: 'pip', ref: 'sglang', installed: versionFromPipString(engine.version) }
+  // The Android app's bundled LiteRT-LM is part of the APK: it updates with the app, never from PyPI.
+  if (engine.kind === 'litert-lm' && isNativeLitertLm(engine.binPath)) return null
   if (engine.kind === 'litert-lm') return { source: 'pip', ref: 'litert-lm', installed: versionFromPipString(engine.version) }
   // KoboldCpp / llamafile: single-binary engines provisioned from GitHub releases. Their
   // installed version IS the stored release tag (vX.Y.Z / X.Y.Z); compareBuildTags falls

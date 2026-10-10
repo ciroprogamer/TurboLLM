@@ -406,6 +406,8 @@ function enumLinuxGpus(): GpuInfo[] {
   // already keys its own registration off of.
   const nativeLibDir = process.env.TURBOLLM_ANDROID_NATIVE_LIB_DIR
   if (process.platform === 'android' && nativeLibDir) {
+    const fromApp = packagedAppGpu(process.platform, process.env)
+    if (fromApp) return [fromApp]
     const vkBin = `${nativeLibDir}/libllama_server_vk.so`
     if (!fs.existsSync(vkBin)) return []
     try {
@@ -475,6 +477,17 @@ function enumVulkanGpus(): GpuInfo[] {
   } catch {
     return []
   }
+}
+
+/** The GPU the Android app names for the daemon, or null. The app reads it from a GL context before starting the
+ *  daemon (MainActivity.gpuEnv): the packaged-app counterpart of Termux's vulkaninfo, and the signal LiteRT-LM's "auto"
+ *  backend needs to pick the GPU. Preferred over running the bundled Vulkan engine with --list-devices: it costs nothing
+ *  at boot and works when that engine isn't shipped. Unified memory, so the budget is the same half of RAM the Termux
+ *  path assumes. Only the packaged app sets these variables; anywhere else this is null. */
+export function packagedAppGpu(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): GpuInfo | null {
+  if (platform !== 'android' || !env.TURBOLLM_ANDROID_NATIVE_LIB_DIR) return null
+  const name = env.TURBOLLM_ANDROID_GPU?.trim()
+  return name ? makeVulkanGpu(name, 'PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU') : null
 }
 
 function makeVulkanGpu(name: string, deviceType: string): GpuInfo {

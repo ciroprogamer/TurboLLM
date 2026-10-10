@@ -21,6 +21,9 @@ import { pipeline } from 'node:stream/promises'
 import type { ConfigStore } from '../config/config'
 import type { HfModelFiles } from '../hf/hf'
 
+/** The single-file model formats a download may target: a GGUF (llama.cpp family) or a LiteRT-LM bundle. */
+const MODEL_FILE_RE = /\.(gguf|litertlm)$/i
+
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'done' | 'error' | 'cancelled'
 
 export interface DownloadRecord {
@@ -189,9 +192,9 @@ export class DownloadManager {
       } else {
         // A non-HF host: a single flat file — its repo structure is unknowable.
         const path = safePathname(u)
-        if (!explicitSubdir && !/\.gguf$/i.test(path)) throw new DownloadError('invalid_url', 'URL must point to a .gguf file.')
+        if (!explicitSubdir && !MODEL_FILE_RE.test(path)) throw new DownloadError('invalid_url', 'URL must point to a .gguf or .litertlm file.')
         const filename = basename(path)
-        if (!explicitSubdir && !/\.gguf$/i.test(filename)) throw new DownloadError('invalid_url', 'Could not derive a .gguf filename from that URL.')
+        if (!explicitSubdir && !MODEL_FILE_RE.test(filename)) throw new DownloadError('invalid_url', 'Could not derive a .gguf or .litertlm filename from that URL.')
         const destDir = explicitSubdir ? join(dir, explicitSubdir) : dir
         mkdirSync(destDir, { recursive: true })
         if ((input.size ?? 0) > 0) this.assertDisk(dir, input.size!)
@@ -204,7 +207,7 @@ export class DownloadManager {
     // HF repos are always `owner/name` — reject anything that can't be one (also stops a
     // degenerate `repo` from sanitising to an empty subfolder that lands in the root).
     if (!repo.includes('/') || !rfilename) throw new DownloadError('invalid_request', 'repo and rfilename are required.')
-    if (!explicitSubdir && !/\.gguf$/i.test(rfilename)) throw new DownloadError('invalid_url', 'The file must be a .gguf.')
+    if (!explicitSubdir && !MODEL_FILE_RE.test(rfilename)) throw new DownloadError('invalid_url', 'The file must be a .gguf or .litertlm.')
 
     // Safetensors/MLX pass an explicit subdir and enqueue each component file themselves
     // — no expansion. Place it (single file) directly under that subdir.
@@ -662,7 +665,7 @@ function parseHfResolveUrl(u: string): { repo: string; rev: string; rfilename: s
     .slice(ri + 2)
     .map((s) => decodeURIComponent(s))
     .join('/')
-  if (!repo.includes('/') || !rev || !rfilename || !/\.gguf$/i.test(rfilename)) return null
+  if (!repo.includes('/') || !rev || !rfilename || !MODEL_FILE_RE.test(rfilename)) return null
   return { repo, rev, rfilename }
 }
 

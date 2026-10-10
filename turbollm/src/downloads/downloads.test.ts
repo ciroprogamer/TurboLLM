@@ -63,7 +63,7 @@ test('a subdir of nothing but dots is no subdir at all, so the .gguf rule applie
     const { dm } = newManager()
     await assert.rejects(
       () => dm.enqueue({ repo: 'AlexWortega/openjev', rfilename: 'qwen3.5-4b-nli-v2/config.json', subdir: '..' }),
-      (e: unknown) => e instanceof DownloadError && e.code === 'invalid_url' && e.message === 'The file must be a .gguf.',
+      (e: unknown) => e instanceof DownloadError && e.code === 'invalid_url' && e.message === 'The file must be a .gguf or .litertlm.',
     )
   } finally {
     restore()
@@ -77,6 +77,29 @@ test('a non-HF URL import with a climbing subdir also stays inside the model fol
     const [rec] = await dm.enqueue({ url: 'https://example.invalid/files/config.json', subdir: '../escape' })
 
     assert.equal(rec.dest, join(modelDir, 'escape', 'config.json'))
+  } finally {
+    restore()
+  }
+})
+
+test('a .litertlm from a Hugging Face repo is a valid download, placed under the repo folder', async () => {
+  const restore = stubFetch()
+  try {
+    const { modelDir, dm } = newManager()
+    const [rec] = await dm.enqueue({ repo: 'litert-community/Gemma3-1B-IT', rfilename: 'gemma3-1b-it-int4.litertlm' })
+    assert.ok(rec.dest.startsWith(modelDir))
+    assert.ok(rec.dest.endsWith('gemma3-1b-it-int4.litertlm'))
+  } finally {
+    restore()
+  }
+})
+
+test('a direct .litertlm URL on any host imports, like a direct .gguf', async () => {
+  const restore = stubFetch()
+  try {
+    const { modelDir, dm } = newManager()
+    const [rec] = await dm.enqueue({ url: 'https://example.com/models/gemma3-1b-it-int4.litertlm' })
+    assert.equal(rec.dest, join(modelDir, 'gemma3-1b-it-int4.litertlm'))
   } finally {
     restore()
   }

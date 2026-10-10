@@ -23,7 +23,22 @@ published version on npm has a matching `vX.Y.Z` tag in git.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **LiteRT-LM in the standalone Android app.** The app now ships LiteRT-LM built in: a native port of
+  `litert-lm serve` over the same `liblitert-lm.so` runtime Termux users run through Python, registered at boot
+  as `litert-lm-android` (TurboLLM-Android, `engines/litert-lm-server`). It speaks the `serve` contract, so the
+  existing LiteRT-LM config, warm-up and request handling apply unchanged; it is not updated from PyPI (it updates
+  with the app) and needs no Python preflight.
+- `.litertlm` models load on the LiteRT-LM engine whichever engine is active, the way Laya models go to Laya — no
+  engine switch needed first.
+- `.litertlm` downloads: a LiteRT-LM repo (e.g. `litert-community/…`) now lists its bundles in the repo view, a chosen
+  bundle downloads as one file, a direct `.litertlm` link imports like a `.gguf` one, and model search is no longer
+  limited to GGUF repos while LiteRT-LM is the active engine.
+
+### Changed
+- The Android app reports its GPU to the daemon (`TURBOLLM_ANDROID_GPU`, read from a GL context), the counterpart of
+  Termux's `vulkaninfo`. LiteRT-LM's default "auto" backend therefore picks the GPU in the app exactly as it does on
+  Termux, and GPU detection no longer runs the Vulkan engine at boot when the app has already named the GPU.
 
 ## [1.14.5] - 2026-10-04
 

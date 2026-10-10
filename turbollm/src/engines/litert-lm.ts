@@ -27,7 +27,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { ensureUv } from './mlx'
 import type { ProvisionProgress } from './download'
@@ -122,7 +122,7 @@ export function pickAndroidWheel(files: PypiFile[], abi: string): PypiFile | nul
 /** Termux hint shared by every "no usable Python" failure. */
 const ANDROID_PYTHON_HINT =
   'LiteRT-LM on Android needs Python 3.10 or newer from Termux (run `pkg install python`) with TurboLLM started ' +
-  'from Termux. The standalone Android app has no Python and cannot run this engine.'
+  'from Termux. The standalone Android app needs none of this: it ships LiteRT-LM built in.'
 
 /** A python>=3.10 with the venv module on this device, or throws with the Termux instructions. */
 async function findAndroidPython(): Promise<string> {
@@ -449,10 +449,35 @@ export function litertLmServerCommand(
   host: string,
   extraArgs: string[] = [],
 ): { cmd: string; args: string[] } {
-  return {
-    cmd: python,
-    args: ['-m', 'litert_lm_cli.main', 'serve', '--config', configPath, '--host', host, '--port', String(port), ...extraArgs],
-  }
+  const serve = ['serve', '--config', configPath, '--host', host, '--port', String(port), ...extraArgs]
+  // The Android app's bundled server takes the CLI's own `serve` arguments, so only the program differs.
+  if (isNativeLitertLm(python)) return { cmd: python, args: serve }
+  return { cmd: python, args: ['-m', 'litert_lm_cli.main', ...serve] }
+}
+
+/**
+ * The standalone Android app's LiteRT-LM engine: a native port of `litert-lm serve` (TurboLLM-Android,
+ * engines/litert-lm-server) that drives the same liblitert-lm.so the Python server reaches through ctypes. The app has
+ * no Python and may only execute files installed with its APK, so it ships this server in its nativeLibraryDir under
+ * a lib*.so name, where seed.ts registers it. It speaks the same contract as `serve` — `--config/--host/--port`, the
+ * model path in each request's `model` field, the runtime's message in a failed request's status line — so everything
+ * else about the litert-lm kind (config file, warm-up, compat) applies unchanged. What differs is only what follows
+ * from it not being Python: no venv preflight, no pip updates, the native library environment.
+ */
+export const LITERT_LM_NATIVE_SERVER = 'liblitertlm_server.so'
+
+/** Whether a litert-lm engine's binPath is the bundled native server rather than a venv's python. */
+export function isNativeLitertLm(binPath: string): boolean {
+  return basename(binPath) === LITERT_LM_NATIVE_SERVER
+}
+
+/** The engine version for the native server, from its `--version` line
+ *  ("turbollm-litertlm-server 1.0.0 (LiteRT-LM 0.18.0)") in the pip-style form the litert-lm kind stores
+ *  ("litert-lm 0.18.0"). `--version` returns before the runtime library is loaded, so this is instant. */
+export async function litertLmNativeVersion(binPath: string): Promise<string> {
+  const { stdout } = await execFileP(binPath, ['--version'], { timeout: 15_000 })
+  const m = /LiteRT-LM\s+([\w.+-]+)/.exec(stdout)
+  return `litert-lm ${m ? m[1] : stdout.trim() || 'unknown'}`
 }
 
 export type LitertLmWarmUp = { ok: true } | { ok: false; message: string }

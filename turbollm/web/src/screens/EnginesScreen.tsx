@@ -226,7 +226,7 @@ const ENGINE_META: Record<string, EngineMeta> = {
       'Runs Gemma, Qwen3 and Phi-4-mini bundles',
       'OpenAI-compatible server out of the box',
     ],
-    cons: ['.litertlm models only (not GGUF)', 'First load of a model can be slow — a minute or more', 'Android needs Termux + Python (not the standalone app)', 'Experimental'],
+    cons: ['.litertlm models only (not GGUF)', 'First load of a model can be slow — a minute or more', 'On Termux it needs Python (the Android app has it built in)', 'Experimental'],
   },
   mlx: {
     icon: Cpu,

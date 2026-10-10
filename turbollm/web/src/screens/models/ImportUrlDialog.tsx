@@ -39,8 +39,8 @@ function parseHfRepoUrl(raw: string): string | null {
   return null
 }
 
-/** True when the URL is a plausible GGUF download target (spec 10 §8 step 2):
- *  path ends in `.gguf` OR matches an HF resolve blob URL. */
+/** True when the URL is a plausible model download target (spec 10 §8 step 2): path ends in `.gguf` or `.litertlm`
+ *  (a LiteRT-LM bundle is a whole model in one file too) OR matches an HF resolve blob URL. */
 function isValidGgufUrl(raw: string): boolean {
   let u: URL
   try {
@@ -50,9 +50,9 @@ function isValidGgufUrl(raw: string): boolean {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
   const path = u.pathname.toLowerCase()
-  if (path.endsWith('.gguf')) return true
-  // HF blob URL: huggingface.co/<repo>/resolve/<rev>/<file>.gguf
-  return /huggingface\.co\/.*\/resolve\/.*\.gguf$/i.test(`${u.host}${u.pathname}`)
+  if (path.endsWith('.gguf') || path.endsWith('.litertlm')) return true
+  // HF blob URL: huggingface.co/<repo>/resolve/<rev>/<file>.gguf (or .litertlm)
+  return /huggingface\.co\/.*\/resolve\/.*\.(gguf|litertlm)$/i.test(`${u.host}${u.pathname}`)
 }
 
 /** Derived filename from the URL path (spec 10 §8: filename preview). */
@@ -74,7 +74,7 @@ function normalizeHfUrl(raw: string): string {
   try {
     if (raw.startsWith('hf://')) {
       const parts = raw.slice(5).split('/')
-      if (parts.length >= 3 && parts[parts.length - 1].toLowerCase().endsWith('.gguf')) {
+      if (parts.length >= 3 && /\.(gguf|litertlm)$/.test(parts[parts.length - 1].toLowerCase())) {
         const [owner, repo, ...rest] = parts
         return `https://huggingface.co/${owner}/${repo}/resolve/main/${rest.join('/')}`
       }
@@ -82,7 +82,7 @@ function normalizeHfUrl(raw: string): string {
     const u = new URL(raw)
     if (u.hostname === 'huggingface.co') {
       const file = u.searchParams.get('show_file_info')
-      if (file && file.toLowerCase().endsWith('.gguf')) {
+      if (file && /\.(gguf|litertlm)$/.test(file.toLowerCase())) {
         return `https://huggingface.co${u.pathname}/resolve/main/${file}`
       }
       u.pathname = u.pathname.replace(/\/blob\//, '/resolve/')
@@ -161,7 +161,7 @@ export function ImportUrlDialog({
         <SheetHeader>
           <SheetTitle>Import from URL</SheetTitle>
           <SheetDescription>
-            Paste a <span className="font-mono">.gguf</span> link (any HTTPS host) or a Hugging Face model page — a repo
+            Paste a <span className="font-mono">.gguf</span> or <span className="font-mono">.litertlm</span> link (any HTTPS host) or a Hugging Face model page — a repo
             link opens its quant list to pick from.
           </SheetDescription>
         </SheetHeader>
@@ -196,7 +196,7 @@ export function ImportUrlDialog({
 
           {showInvalid && (
             <p className="text-[12px]" style={{ color: 'var(--err)' }}>
-              Enter a Hugging Face model link, or an http(s) link ending in <span className="font-mono">.gguf</span>.
+              Enter a Hugging Face model link, or an http(s) link ending in <span className="font-mono">.gguf</span> or <span className="font-mono">.litertlm</span>.
             </p>
           )}
 

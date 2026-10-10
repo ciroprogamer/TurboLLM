@@ -13,6 +13,9 @@ import { isNativeLitertLm, LITERT_LM_NATIVE_SERVER, litertLmNativeVersion, liter
 import { pyEngineEnv } from './manager'
 import { engineForModel, Registry } from './registry'
 import { ensureAndroidBundledEngine } from './seed'
+import { planAutoLoad } from './auto-load'
+import { servingEngineKind } from './serving'
+import { litertlmEntryFor } from '../models/litertlm'
 import { resolveUpdateSource } from './update'
 
 /** A stand-in for the native server: answers `--version` exactly as the real one does. */
@@ -178,4 +181,24 @@ test('pyEngineEnv: the native LiteRT-LM server gets a writable cache directory f
 test('availableMemBytes: reads MemAvailable, which counts the page cache Android keeps full', () => {
   const meminfo = 'MemTotal:        7812345 kB\nMemFree:          212000 kB\nMemAvailable:    3500000 kB\n'
   assert.equal(availableMemBytes(meminfo), 3500000 * 1024)
+})
+
+test('planAutoLoad: a last-used .litertlm model resumes on the LiteRT-LM engine while llama.cpp is active', () => {
+  const llama = engine({ id: 'llama', kind: 'llama-server' })
+  const litert = engine({ id: 'litert', kind: 'litert-lm', binPath: '/lib/liblitertlm_server.so' })
+  const store = ConfigStore.load(join(tmpDir('tllm-litert-native-'), 'config.json'))
+  store.update((c) => { c.autoLoadOnStart = true; c.lastLoaded = { ...c.lastLoaded, modelKey: 'lfm|INT8|1' } })
+  const entry = litertlmEntryFor('/m/lfm_int8.litertlm', '/m', 1, 0)
+  const plan = planAutoLoad({ cfg: store.snapshot(), engine: llama, litertLmEngine: litert, comfyBlocked: false, findModel: () => entry })
+  assert.equal(plan.kind, 'load-model')
+  assert.equal(plan.kind === 'load-model' && plan.engine.id, 'litert')
+})
+
+test('servingEngineKind: the engine the loaded model runs on, not the active one', () => {
+  const litert = engine({ id: 'litert', kind: 'litert-lm' })
+  const llama = engine({ id: 'llama', kind: 'llama-server' })
+  const d = { registry: { active: () => llama }, manager: { currentOpts: () => ({ engine: litert }) } }
+  assert.equal(servingEngineKind(d as never), 'litert-lm')
+  const idle = { registry: { active: () => llama }, manager: { currentOpts: () => null } }
+  assert.equal(servingEngineKind(idle as never), 'llama-server')
 })

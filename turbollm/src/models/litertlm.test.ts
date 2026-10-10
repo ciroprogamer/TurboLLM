@@ -90,9 +90,10 @@ const pVarint = (field: number, v: number) => [...varint(field * 8), ...varint(v
 const pBytes = (field: number, b: number[]) => [...varint(field * 8 + 2), ...varint(b.length), ...b]
 
 /** A minimal .litertlm: the real prefix, a hand-built section FlatBuffer, and the two metadata protos. */
-function fakeBundle(llmMax: number, kvLens: number[]): Buffer {
+function fakeBundle(llmMax: number, kvLens: Array<[type: number, len: number]>): Buffer {
   const llm = Buffer.from(pVarint(5, llmMax))
-  const states = kvLens.flatMap((n) => pBytes(2, [...pBytes(1, [...Buffer.from('kv_cache_k_0')]), ...pVarint(9, n)]))
+  const states = kvLens.flatMap(([type, n]) =>
+    pBytes(2, [...pBytes(1, [...Buffer.from('kv_cache_k_0')]), ...pVarint(6, type), ...pVarint(9, n)]))
   const exec = Buffer.from(pBytes(1, states))
   const hdr = Buffer.alloc(108)
   hdr.writeUInt32LE(12, 0) // root table
@@ -114,18 +115,26 @@ function fakeBundle(llmMax: number, kvLens: number[]): Buffer {
   return file
 }
 
-test('litertlmNativeCtxFromFile: the KV caches\' maximum_sequence_length is the limit, the smallest one winning', async () => {
+test('litertlmNativeCtxFromFile: the global KV caches\' maximum_sequence_length is the limit, the smallest winning', async () => {
   const dir = tmpDir('tllm-litertlm-hdr-')
   const p = join(dir, 'LFM2.5-230M_int8.litertlm')
-  writeFileSync(p, fakeBundle(4096, [8192, 4096]))
+  // A conv state (type 5, no length), a global key cache at 8192 and a global value cache at 4096.
+  writeFileSync(p, fakeBundle(4096, [[5, 0], [1, 8192], [2, 4096]]))
   assert.equal(await litertlmNativeCtxFromFile(p), 4096)
 })
 
-test('litertlmNativeCtxFromFile: LlmMetadata max_num_tokens when no KV cache declares a length', async () => {
+test('litertlmNativeCtxFromFile: a sliding-window cache\'s length is its window, not the context', async () => {
+  const dir = tmpDir('tllm-litertlm-hdr-')
+  const p = join(dir, 'gemma.litertlm')
+  writeFileSync(p, fakeBundle(32768, [[3, 512], [4, 512], [1, 32768], [2, 32768]]))
+  assert.equal(await litertlmNativeCtxFromFile(p), 32768)
+})
+
+test('litertlmNativeCtxFromFile: no limit when no global cache declares one — LlmMetadata alone is only a default', async () => {
   const dir = tmpDir('tllm-litertlm-hdr-')
   const p = join(dir, 'm.litertlm')
   writeFileSync(p, fakeBundle(32768, []))
-  assert.equal(await litertlmNativeCtxFromFile(p), 32768)
+  assert.equal(await litertlmNativeCtxFromFile(p), 0)
 })
 
 test('litertlmNativeCtxFromFile: 0 for anything it cannot read', async () => {

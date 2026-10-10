@@ -512,17 +512,18 @@ export async function warmUpLitertLm(port: number, modelRef: string, signal: Abo
   }
 }
 
-/** The user-facing text for a failed warm-up: the runtime's message plus the two causes that account for most of them. */
 /** A runtime error from a LiteRT-LM turn, with the likely fix when it is the context limit. A .litertlm bundle is
  *  exported with a fixed maximum sequence length, and raising Context on the load panel cannot go past it, so a long
  *  system prompt (the TurboLLM Expert persona alone is ~15k tokens) fails on small bundles however Context is set. */
 export function litertLmTurnErrorMessage(reason: string): string {
-  if (!/max(imum)?[ _]?(num[ _]?)?tokens|too long|exceed|context|sequence length|kv[ -]?cache/i.test(reason)) return reason
+  // The runtime's wording (tasks.cc): "Input token ids are too long. Exceeding the maximum number of tokens allowed".
+  if (!/token ids are too long|maximum number of tokens|max_num_tokens/i.test(reason)) return reason
   return `${reason}. The prompt is longer than this model can take: a LiteRT-LM bundle has a fixed maximum length set ` +
     'when it was exported, and the Context setting cannot raise it. Use a shorter system prompt (the Lite persona), ' +
     'start a new chat, or use a model exported with a longer context.'
 }
 
+/** The user-facing text for a failed warm-up: the runtime's message plus the two causes that account for most of them. */
 export function litertLmLoadFailureMessage(reason: string, backend: 'cpu' | 'gpu'): string {
   // The GPU hint must name a control the LiteRT-LM panel actually offers: "set GPU layers to
   // 0" is llama.cpp advice — the GPU-layers slider is not rendered for LiteRT-LM, whose

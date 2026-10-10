@@ -32,6 +32,7 @@ import { getModelProfile } from '../config/config'
 import { getSysInfo } from '../sysinfo/sysinfo'
 import { noteLocalActivity } from '../link/host-idle'
 import { callChatUpstream, resolveChatUpstream, type ChatUpstream } from './chat-upstream'
+import { servingEngine, servingEngineKind } from '../engines/serving'
 
 /** The per-request code-routine trust decision. Exported ONLY so it can be behaviourally
  *  pinned — both generation entry points must call this, never inline the expression.
@@ -792,7 +793,7 @@ function reportChatBenchResult(d: Deps, ms: ModelInfo, stats: Partial<MessageSta
     if (stats.tps === undefined || stats.genTokens === undefined || stats.genTokens < MIN_GEN_TOKENS_FOR_BENCH) return
 
     const entry = d.scanner.get(ms.key)
-    const engine = d.registry.active()
+    const engine = servingEngine(d)
     if (!entry || !engine) return
 
     const cfg = d.store.snapshot()
@@ -890,7 +891,7 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
 
   // Map conversation sampling overrides (camelCase) to the engine's snake_case names.
   const convS = conv.sampling ?? {}
-  const engineKind = d.registry.active()?.kind ?? ''
+  const engineKind = servingEngineKind(d)
   // BUG-006: vLLM and SGLang reject `repeat_penalty` (the llama.cpp name) and require
   // `repetition_penalty` — the OpenAI-spec name. mlx-vlm's request schema (server/schemas.py)
   // only declares `repetition_penalty` too — `repeat_penalty` isn't rejected (the schema
@@ -1144,7 +1145,14 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
         let reason = ''
         try {
           const text = await res.text()
-          try { reason = streamChunkError(JSON.parse(text) as Record<string, unknown>) ?? '' } catch { reason = text.trim().slice(0, 500) }
+          let parsed: Record<string, unknown> | null = null
+          try { parsed = JSON.parse(text) as Record<string, unknown> } catch { /* not JSON */ }
+          // `{"error": …}` (OpenAI, llama.cpp, LiteRT-LM), else `{"message": …}` (vLLM) / `{"detail": …}` (FastAPI),
+          // else the raw text.
+          const msg = parsed && typeof parsed === 'object'
+            ? streamChunkError(parsed) ?? (typeof parsed.message === 'string' ? parsed.message : typeof parsed.detail === 'string' ? parsed.detail : null)
+            : null
+          reason = (msg ?? text).trim().slice(0, 500)
         } catch { /* no body */ }
         if (reason && engineKind === 'litert-lm') reason = litertLmTurnErrorMessage(reason)
         await emit({ event: 'error', data: { code: 'engine_error', message: reason ? `Engine returned ${res.status}: ${reason}` : `Engine returned ${res.status}` } })
@@ -1193,7 +1201,10 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
           let chunk: Record<string, unknown>
           try { chunk = JSON.parse(raw) as Record<string, unknown> } catch { continue }
           const engineError = streamChunkError(chunk)
-          if (engineError) throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
+          if (engineError) {
+            cancelReader() // nothing more is read from this stream; let the engine see the hang-up
+            throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
+          }
 
           // Prompt progress
           const pp = chunk.prompt_progress as { processed?: number; total?: number; tps?: number } | undefined
@@ -1513,7 +1524,10 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
             let chunk: Record<string, unknown>
             try { chunk = JSON.parse(raw) as Record<string, unknown> } catch { continue }
             const engineError = streamChunkError(chunk)
-            if (engineError) throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
+            if (engineError) {
+              cancelReader()
+              throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
+            }
             if (chunk.usage) finalUsage = chunk.usage as typeof finalUsage
             if (chunk.timings) finalTimings = chunk.timings as typeof finalTimings
             // #52 item 9: the extra pass re-sends the whole conversation, so ITS prompt is the

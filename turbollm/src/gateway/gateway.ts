@@ -30,6 +30,7 @@ import {
   serverToolMessage,
   serverToolSseEvents,
 } from './server-tools'
+import { servingEngineKind } from '../engines/serving'
 
 /** Resolve the Code session (if any) a gateway request belongs to, from the same token a
  *  terminal-launched CLI carries as its ANTHROPIC_AUTH_TOKEN / OpenAI-compatible apiKey
@@ -333,7 +334,7 @@ export function registerGateway(app: Hono, d: Deps, opts: GatewayOptions = {}): 
     if (remote) {
       (oaiBody as Record<string, unknown>).model = remote.modelKey
     } else {
-      const localKind = d.registry.active()?.kind ?? ''
+      const localKind = servingEngineKind(d)
       const oaiAlias = engineModelAlias(localKind, d.manager.currentOpts()?.modelPath)
       if (oaiAlias) (oaiBody as Record<string, unknown>).model = oaiAlias
       // mapToOpenAI emits `max_tokens`, which LiteRT-LM ignores (see applyEngineTokenLimit).
@@ -1005,7 +1006,7 @@ export async function gatewayV1Handler(c: Context, d: Deps, opts: GatewayV1Optio
       }
       // LiteRT-LM only reads `max_completion_tokens` (see applyEngineTokenLimit). The local engine's
       // kind says nothing about a Turbo Link host's engine, which shapes the request itself.
-      if (parsedBody && !remote) applyEngineTokenLimit(d.registry.active()?.kind ?? '', parsedBody)
+      if (parsedBody && !remote) applyEngineTokenLimit(servingEngineKind(d), parsedBody)
       // Rewrite the outbound model id for engines that serve under a fixed alias
       // (mlx-lm / vLLM) or that require the real loaded model path (mlx-vlm).
       // Routing above already used the caller's original id.
@@ -1015,7 +1016,7 @@ export async function gatewayV1Handler(c: Context, d: Deps, opts: GatewayV1Optio
       if (parsedBody && remote) {
         parsedBody.model = remote.modelKey
       } else if (parsedBody) {
-        const alias = engineModelAlias(d.registry.active()?.kind ?? '', d.manager.currentOpts()?.modelPath)
+        const alias = engineModelAlias(servingEngineKind(d), d.manager.currentOpts()?.modelPath)
         if (alias) parsedBody.model = alias
       }
       // A plain OpenAI-protocol client (opencode/LiteLLM/any `@ai-sdk/openai-compatible`

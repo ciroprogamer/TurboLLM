@@ -78,9 +78,10 @@ export async function ensureAndroidBundledEngine(registry: Registry): Promise<vo
         // Not a llama-server, so no probe: the version comes from the server's own --version, and it is
         // refreshed on every boot because an app update can ship a newer runtime at the same path.
         // A failed --version must not cost the engine: it ships in the APK, so register it regardless and say why.
+        // A version already on record is kept over the placeholder: one failed probe must not erase a real one.
         const version = await litertLmNativeVersion(binPath).catch((err) => {
           console.warn(`android: ${name} --version failed (${err instanceof Error ? err.message : err}); registering anyway`)
-          return 'litert-lm (bundled)'
+          return existing?.version || 'litert-lm (bundled)'
         })
         if (!existing) {
           registry.addLitertLm(name, binPath, version)

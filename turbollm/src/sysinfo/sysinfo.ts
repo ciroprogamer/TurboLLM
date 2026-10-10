@@ -803,7 +803,7 @@ function androidSocName(): string {
   return maker && !model.toLowerCase().startsWith(maker.toLowerCase()) ? `${maker} ${model}` : model
 }
 
-/** The CPUs the kernel knows ("0-7"), counted. `nproc` and os.cpus() count only the CPUs this process may run on,
+/** The CPUs physically present ("0-7"), counted. `nproc` and os.cpus() count only the CPUs this process may run on,
  *  and an Android app's cpuset leaves some out, so the phone showed 7 cores instead of 8. */
 export function countCpuList(list: string): number {
   let n = 0
@@ -818,7 +818,7 @@ export function countCpuList(list: string): number {
 function getCpuCoreCount(): number {
   if (process.platform === 'android') {
     try {
-      const n = countCpuList(fs.readFileSync('/sys/devices/system/cpu/possible', 'utf8'))
+      const n = countCpuList(fs.readFileSync('/sys/devices/system/cpu/present', 'utf8'))
       if (n > 0) return n
     } catch {
       /* fall through */

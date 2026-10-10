@@ -49,17 +49,16 @@ export function litertlmNativeCtxFromName(fileName: string): number {
 
 // ── Context limit from the bundle header ──────────────────────────────────────────────────
 // A .litertlm starts with "LITERTLM", three uint32 versions, 4 bytes of padding, a uint64 header-end offset, then a
-// FlatBuffer (schema/core/litertlm_header_schema.fbs) listing the sections with their byte ranges. Two small protobuf
-// sections say how long a sequence the bundle takes:
-//   - ExecutorMetadata: each KV-cache state buffer's `maximum_sequence_length` (field 9). A static export sizes its
-//     KV cache to exactly this, and the runtime clamps max_num_tokens down to it whatever the engine was asked for
-//     (ClampMaxNumTokens in llm_litert_compiled_model_executor.cc). That is a hard limit.
-//   - LlmMetadata: `max_num_tokens` (field 5), the exporter's declared context, which the runtime uses when none is
-//     set. Not always a hard limit (a dynamic export can grow past it), but it is what the bundle says it is for.
-// litert-community/LFM2.5-230M, for one: no `ekv` in its file name, 4096 in both places, and a 15k-token prompt failed
+// FlatBuffer (schema/core/litertlm_header_schema.fbs) listing the sections with their byte ranges. The small
+// ExecutorMetadata protobuf section describes each KV-cache state buffer, with its `maximum_sequence_length`
+// (field 9). A static export sizes its global (full-attention) KV caches to exactly that, and the runtime clamps
+// max_num_tokens down to it whatever the engine was asked for (ClampMaxNumTokens in
+// llm_litert_compiled_model_executor.cc), so it is a hard limit.
+// Only global caches count: a sliding-window (local) cache's length is its window, not the context, and LlmMetadata's
+// own max_num_tokens is just the default for a dynamic export, which can grow past it. Neither is used here.
+// litert-community/LFM2.5-230M, for one: no `ekv` in its file name, 4096-entry KV caches, and a 15k-token prompt failed
 // with "Input token ids are too long ... 15753 >= 4096" while the slider offered 256k.
 
-const SECTION_LLM_METADATA = 5
 const SECTION_EXECUTOR_METADATA = 9
 const MAX_HEADER = 1 << 20
 const MAX_PROTO = 1 << 20
@@ -135,28 +134,30 @@ export function protoFields(buf: Buffer): ProtoField[] {
   return out
 }
 
-/** The longest sequence the bundle's KV caches hold (ExecutorMetadata), or 0 when it declares none. */
+/** StateBuffer.Type values whose length is the context: TYPE_UNSPECIFIED (older exports), TYPE_GLOBAL_KEY_CACHE and
+ *  TYPE_GLOBAL_VALUE_CACHE. Local (sliding-window) caches and linear-attention states are left out. */
+const GLOBAL_CACHE_TYPES = new Set([0, 1, 2])
+
+/** The longest sequence the bundle's global KV caches hold (ExecutorMetadata), or 0 when they declare none. */
 export function executorMetadataMaxSequence(proto: Buffer): number {
   let max = 0
   for (const top of protoFields(proto)) {
     if (top.field !== 1 || !top.bytes) continue // llm_executor_metadata
     for (const f of protoFields(top.bytes)) {
       if (f.field !== 2 || !f.bytes) continue // state_buffers
-      const len = protoFields(f.bytes).find((s) => s.field === 9)?.varint ?? 0 // maximum_sequence_length
-      // Every attention cache must hold the sequence, so the smallest declared one is the limit.
+      const fields = protoFields(f.bytes)
+      const type = fields.find((x) => x.field === 6)?.varint ?? 0
+      if (!GLOBAL_CACHE_TYPES.has(type)) continue
+      const len = fields.find((x) => x.field === 9)?.varint ?? 0 // maximum_sequence_length
+      // Every global cache must hold the sequence, so the smallest declared one is the limit.
       if (len > 0) max = max === 0 ? len : Math.min(max, len)
     }
   }
   return max
 }
 
-/** LlmMetadata's declared `max_num_tokens`, or 0. */
-export function llmMetadataMaxTokens(proto: Buffer): number {
-  return protoFields(proto).find((f) => f.field === 5)?.varint ?? 0
-}
-
-/** The context the bundle itself declares (see the section comment above), or 0 when the header says nothing or
- *  cannot be read. Reads only the header and the two small metadata sections, never the weights. */
+/** The hard context limit the bundle declares (see the section comment above), or 0 when the header says nothing or
+ *  cannot be read. Reads only the header and the small ExecutorMetadata section, never the weights. */
 export async function litertlmNativeCtxFromFile(path: string): Promise<number> {
   let fh: Awaited<ReturnType<typeof open>> | null = null
   try {
@@ -173,19 +174,14 @@ export async function litertlmNativeCtxFromFile(path: string): Promise<number> {
     const header = await read(32, headerEnd - 32)
     const root = new FbTable(header, header.readUInt32LE(0))
     const sections = root.table(1)?.tables(0) ?? [] // section_metadata.objects
-    let exec = 0
-    let llm = 0
     for (const s of sections) {
-      const type = s.u8(3)
-      if (type !== SECTION_LLM_METADATA && type !== SECTION_EXECUTOR_METADATA) continue
+      if (s.u8(3) !== SECTION_EXECUTOR_METADATA) continue
       const begin = s.u64(1)
       const end = s.u64(2)
       if (end <= begin || end - begin > MAX_PROTO) continue
-      const proto = await read(begin, end - begin)
-      if (type === SECTION_EXECUTOR_METADATA) exec = executorMetadataMaxSequence(proto)
-      else llm = llmMetadataMaxTokens(proto)
+      return executorMetadataMaxSequence(await read(begin, end - begin))
     }
-    return exec || llm
+    return 0
   } catch {
     return 0 // a header this reader does not understand costs only the slider's precision
   } finally {

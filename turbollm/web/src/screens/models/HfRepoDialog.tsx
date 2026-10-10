@@ -219,23 +219,11 @@ export function HfRepoContent({
       },
       {
         onSuccess: () => { toast.success(`Downloading ${selectedFile.name} on ${machine}`) },
-        onError: (e) => {
-          // Compat: an older host still enforces the .gguf-only repo-file guard, and its
-          // 400 reads back through `invalid_request` as "this is a bug in TurboLLM" —
-          // which it is not: this UI validated the name against the same extension set
-          // the CURRENT daemon accepts before sending. A non-GGUF single-file model that
-          // comes back invalid_request is that version skew, so name the fix instead.
-          // invalid_request is also what an UP-TO-DATE host answers for an ambiguous bundle
-          // name or a bad repo id, so the code alone is not enough: only the old guard's own
-          // wording (isOldGgufOnlyRefusal) counts as skew; everything else keeps the generic copy.
-          if (e instanceof ApiError && !/\.gguf$/i.test(selectedFile.name) && isOldGgufOnlyRefusal(e)) {
-            setRemoteDlError(
-              `${machine} is running an older TurboLLM that only accepts .gguf downloads. Update TurboLLM on ${machine}, or pick a .gguf quant.`,
-            )
-            return
-          }
-          setRemoteDlError(describeRemoteFailure(e, machine).message)
-        },
+        // No version-skew special case: an older host (still on the .gguf-only guard) refuses a
+        // .litertlm with invalid_request, but the peer proxy (link-admin-routes remoteFailure)
+        // relays only a 400's STATUS and CODE and replaces its message, so this UI cannot tell
+        // that refusal from any other invalid_request — it reads as the generic failure.
+        onError: (e) => setRemoteDlError(describeRemoteFailure(e, machine).message),
       },
     )
   }
@@ -518,15 +506,6 @@ function QuantDropdown({
       </DropdownMenuContent>
     </DropdownMenu>
   )
-}
-
-/** True when `e` is the refusal an OLDER Turbo Link host gives a non-GGUF single-file
- *  download: `invalid_request` with the old guard's wording ("…rfilename a .gguf file in
- *  it."). A current host words the same check ".gguf or .litertlm model file", and its other
- *  invalid_request causes (ambiguous bundle name, malformed repo id) say something else
- *  again — none of those may be reported as "update TurboLLM". */
-export function isOldGgufOnlyRefusal(e: ApiError): boolean {
-  return e.code === 'invalid_request' && /rfilename a \.gguf file in it/i.test(e.message) && !/litertlm/i.test(e.message)
 }
 
 /** How one row of the picker reads: a GGUF by its quant, a `.litertlm` bundle by its

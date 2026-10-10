@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { HfRepoContent, isOldGgufOnlyRefusal } from './HfRepoDialog'
+import { HfRepoContent } from './HfRepoDialog'
 import { ApiError } from '../../lib/api'
 import type { LinkSummary } from '../../lib/link-api'
 import type { HfRepoDetail, HfRepoFile } from '../../lib/types'
@@ -205,17 +205,15 @@ describe('HfRepoContent — a .litertlm repo', () => {
 })
 
 describe('HfRepoContent — a .litertlm repo over Turbo Link', () => {
-  it('names the version skew when an older host refuses a .litertlm with invalid_request', async () => {
-    // Compat: the host is a separate install on a separate release cadence, and one
-    // version behind still enforces the .gguf-only repo-file guard. Its 400 relays as
-    // invalid_request, whose generic copy reads "this is a bug in TurboLLM" — for a
-    // non-GGUF file this UI validated against the current extension set before
-    // sending, so the skew is named instead, with its fix.
+  it('surfaces a host refusal as the generic remote failure (no version-skew special case)', async () => {
+    // An older host (still on the .gguf-only guard) refuses a .litertlm with invalid_request,
+    // but the peer proxy relays only a 400's status and code — its message is replaced — so
+    // the UI cannot tell that from any other invalid_request and does not try to.
     linkState.links = [
       { id: 'l1', name: 'workstation', status: 'online', grantedCapabilities: ['downloads:read', 'downloads:write'], lastError: null },
     ]
     remoteStart.mockImplementationOnce((_input: unknown, opts?: { onError?: (e: unknown) => void }) => {
-      opts?.onError?.(new ApiError('invalid_request', "repo must be a Hugging Face 'owner/name' id and rfilename a .gguf file in it.", 400))
+      opts?.onError?.(new ApiError('invalid_request', 'workstation could not do that right now.', 400))
     })
     const user = userEvent.setup()
     renderContent()
@@ -224,47 +222,8 @@ describe('HfRepoContent — a .litertlm repo over Turbo Link', () => {
     await user.click(screen.getByTestId('download-target-trigger'))
     await user.click(screen.getByText('workstation'))
 
-    expect(await screen.findByText(/running an older TurboLLM that only accepts \.gguf downloads/i)).toBeInTheDocument()
-    expect(screen.queryByText(/bug in TurboLLM/i)).not.toBeInTheDocument()
-  })
-})
-
-describe('HfRepoContent — only the old guard\'s own refusal reads as version skew', () => {
-  // The code alone is not enough: an UP-TO-DATE host also answers invalid_request for an
-  // ambiguous bundle name or a malformed repo id, and neither of those is "update TurboLLM".
-  const fail = async (message: string) => {
-    linkState.links = [
-      { id: 'l1', name: 'workstation', status: 'online', grantedCapabilities: ['downloads:read', 'downloads:write'], lastError: null },
-    ]
-    remoteStart.mockImplementationOnce((_input: unknown, opts?: { onError?: (e: unknown) => void }) => {
-      opts?.onError?.(new ApiError('invalid_request', message, 400))
-    })
-    const user = userEvent.setup()
-    renderContent()
-    await pickVariant(/^GPU/)
-    await user.click(screen.getByTestId('download-target-trigger'))
-    await user.click(screen.getByText('workstation'))
-  }
-
-  it('keeps the generic copy for an ambiguous-name rejection from a current host', async () => {
-    await fail("Ambiguous '.litertlm' name 'model.litertlm' — this repo has 2 bundles with that filename. Pass the full repo path (e.g. 'gpu/model.litertlm').")
-    expect(await screen.findByText(/bug in TurboLLM/i)).toBeInTheDocument()
+    expect(await screen.findByText(/rejected the request as malformed/i)).toBeInTheDocument()
     expect(screen.queryByText(/older TurboLLM/i)).not.toBeInTheDocument()
-  })
-
-  it('keeps the generic copy for a malformed repo id / file from a current host', async () => {
-    await fail("repo must be a Hugging Face 'owner/name' id and rfilename a .gguf or .litertlm model file in it.")
-    expect(await screen.findByText(/bug in TurboLLM/i)).toBeInTheDocument()
-    expect(screen.queryByText(/older TurboLLM/i)).not.toBeInTheDocument()
-  })
-})
-
-describe('isOldGgufOnlyRefusal', () => {
-  it('matches only the old guard\'s wording', () => {
-    expect(isOldGgufOnlyRefusal(new ApiError('invalid_request', "repo must be a Hugging Face 'owner/name' id and rfilename a .gguf file in it.", 400))).toBe(true)
-    expect(isOldGgufOnlyRefusal(new ApiError('invalid_request', 'rfilename a .gguf or .litertlm model file in it.', 400))).toBe(false)
-    expect(isOldGgufOnlyRefusal(new ApiError('invalid_request', 'something else', 400))).toBe(false)
-    expect(isOldGgufOnlyRefusal(new ApiError('internal', 'rfilename a .gguf file in it', 500))).toBe(false)
   })
 })
 

@@ -57,13 +57,78 @@ test('a subdir that tries to climb out lands inside the model folder anyway', as
   assert.equal(windows.dest, join(windows.modelDir, 'evil', 'config.json'))
 })
 
-test('a subdir of nothing but dots is no subdir at all, so the .gguf rule applies again', async () => {
+test('a subdir of nothing but dots is no subdir at all, so the single-file model rule applies again', async () => {
   const restore = stubFetch()
   try {
     const { dm } = newManager()
     await assert.rejects(
       () => dm.enqueue({ repo: 'AlexWortega/openjev', rfilename: 'qwen3.5-4b-nli-v2/config.json', subdir: '..' }),
-      (e: unknown) => e instanceof DownloadError && e.code === 'invalid_url' && e.message === 'The file must be a .gguf or .litertlm.',
+      (e: unknown) => e instanceof DownloadError && e.code === 'invalid_url' && e.message === 'The file must be a .gguf or .litertlm model file.',
+    )
+  } finally {
+    restore()
+  }
+})
+
+test('a .litertlm HF repo file enqueues as one self-contained model under <owner>/<repo>', async () => {
+  const restore = stubFetch()
+  try {
+    const { modelDir, dm } = newManager()
+    const [rec] = await dm.enqueue({
+      repo: 'litert-community/gemma-4-E2B-it-litert-lm',
+      rfilename: 'gemma-4-E2B-it-gpu.litertlm',
+      size: 2_008_432_640,
+    })
+
+    assert.equal(rec.name, 'gemma-4-E2B-it-gpu.litertlm')
+    assert.equal(rec.dest, join(modelDir, 'litert-community', 'gemma-4-E2B-it-litert-lm', 'gemma-4-E2B-it-gpu.litertlm'))
+    assert.equal(rec.url, 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-gpu.litertlm')
+    assert.equal(rec.total, 2_008_432_640)
+  } finally {
+    restore()
+  }
+})
+
+test('a non-HF URL import of a .litertlm bundle downloads as a single flat file', async () => {
+  const restore = stubFetch()
+  try {
+    const { modelDir, dm } = newManager()
+    const [rec] = await dm.enqueue({ url: 'https://example.invalid/files/model_q4.litertlm' })
+
+    assert.equal(rec.name, 'model_q4.litertlm')
+    assert.equal(rec.dest, join(modelDir, 'model_q4.litertlm'))
+  } finally {
+    restore()
+  }
+})
+
+test('an HF resolve URL to a .litertlm bundle takes the repo download path, not a raw import', async () => {
+  const restore = stubFetch()
+  try {
+    const { modelDir, dm } = newManager()
+    // No expander wired: the repo path still resolves the destination from the repo id.
+    const [rec] = await dm.enqueue({
+      url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-gpu.litertlm',
+    })
+
+    assert.equal(rec.repo, 'litert-community/gemma-4-E2B-it-litert-lm')
+    assert.equal(rec.dest, join(modelDir, 'litert-community', 'gemma-4-E2B-it-litert-lm', 'gemma-4-E2B-it-gpu.litertlm'))
+  } finally {
+    restore()
+  }
+})
+
+test('a non-model file extension is still rejected for both a raw URL and a repo file', async () => {
+  const restore = stubFetch()
+  try {
+    const { dm } = newManager()
+    await assert.rejects(
+      () => dm.enqueue({ url: 'https://example.invalid/files/model.safetensors' }),
+      (e: unknown) => e instanceof DownloadError && e.code === 'invalid_url' && e.message === 'URL must point to a .gguf or .litertlm model file.',
+    )
+    await assert.rejects(
+      () => dm.enqueue({ repo: 'someone/model', rfilename: 'model.safetensors' }),
+      (e: unknown) => e instanceof DownloadError && e.code === 'invalid_url' && e.message === 'The file must be a .gguf or .litertlm model file.',
     )
   } finally {
     restore()
@@ -77,29 +142,6 @@ test('a non-HF URL import with a climbing subdir also stays inside the model fol
     const [rec] = await dm.enqueue({ url: 'https://example.invalid/files/config.json', subdir: '../escape' })
 
     assert.equal(rec.dest, join(modelDir, 'escape', 'config.json'))
-  } finally {
-    restore()
-  }
-})
-
-test('a .litertlm from a Hugging Face repo is a valid download, placed under the repo folder', async () => {
-  const restore = stubFetch()
-  try {
-    const { modelDir, dm } = newManager()
-    const [rec] = await dm.enqueue({ repo: 'litert-community/Gemma3-1B-IT', rfilename: 'gemma3-1b-it-int4.litertlm' })
-    assert.ok(rec.dest.startsWith(modelDir))
-    assert.ok(rec.dest.endsWith('gemma3-1b-it-int4.litertlm'))
-  } finally {
-    restore()
-  }
-})
-
-test('a direct .litertlm URL on any host imports, like a direct .gguf', async () => {
-  const restore = stubFetch()
-  try {
-    const { modelDir, dm } = newManager()
-    const [rec] = await dm.enqueue({ url: 'https://example.com/models/gemma3-1b-it-int4.litertlm' })
-    assert.equal(rec.dest, join(modelDir, 'gemma3-1b-it-int4.litertlm'))
   } finally {
     restore()
   }

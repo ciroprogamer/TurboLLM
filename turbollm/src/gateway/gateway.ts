@@ -31,6 +31,7 @@ import {
   serverToolSseEvents,
 } from './server-tools'
 import { servingEngineKind } from '../engines/serving'
+import { redactLocalPaths } from '../util/redact-paths'
 
 /** Resolve the Code session (if any) a gateway request belongs to, from the same token a
  *  terminal-launched CLI carries as its ANTHROPIC_AUTH_TOKEN / OpenAI-compatible apiKey
@@ -70,16 +71,19 @@ export function clientAbort(c: { req: { raw: Request } }): AbortController {
 }
 
 /** Best-effort extraction of a structured error from a failed engine (llama.cpp-family) HTTP
- *  response. These engines mirror the OpenAI `{error:{message,type}}` shape on failure; falls
+ *  response, passed through `redact` (the gateway hands its clients redactLocalPaths) before it leaves. These engines mirror the OpenAI `{error:{message,type}}` shape on failure; falls
  *  back to the raw body (truncated) when it isn't JSON-shaped, so a crash page or a plain-text
  *  panic still surfaces something readable instead of a blanket "Engine error." */
-export async function describeEngineError(res: Response): Promise<{ message: string; type?: string }> {
+export async function describeEngineError(
+  res: Response,
+  redact: (text: string) => string = (t) => t,
+): Promise<{ message: string; type?: string }> {
   const raw = await res.text().catch(() => '')
   try {
     const parsed = JSON.parse(raw) as { error?: { message?: string; type?: string } }
-    if (parsed.error?.message) return { message: parsed.error.message, type: parsed.error.type }
+    if (parsed.error?.message) return { message: redact(parsed.error.message), type: parsed.error.type }
   } catch { /* not JSON — fall through to raw */ }
-  return { message: raw.slice(0, 2000) || `Engine returned HTTP ${res.status}.` }
+  return { message: redact(raw.slice(0, 2000)) || `Engine returned HTTP ${res.status}.` }
 }
 
 /** Map an engine's real HTTP status to the closest Anthropic error `type` (spec 06) when the
@@ -553,7 +557,7 @@ export function registerGateway(app: Hono, d: Deps, opts: GatewayOptions = {}): 
               // incompatibility, overload, crash) to the same hardcoded 'api_error' — that
               // flattening is what made bugs #1-#4 in a Code session all read identically from
               // the terminal, with no way to tell them apart.
-              const { message, type } = await describeEngineError(res)
+              const { message, type } = await describeEngineError(res, (t) => redactLocalPaths(d, t))
               finalizeLog({
                 status: res.status, error: { code: type ?? anthropicErrorType(res.status), message },
                 durationMs: Date.now() - requestStart,
@@ -679,7 +683,7 @@ export function registerGateway(app: Hono, d: Deps, opts: GatewayOptions = {}): 
       // flattening every distinct failure (bad request, model incompatibility, overload, crash)
       // to the same hardcoded 500/'api_error' — that flattening is what made bugs #1-#4 in a
       // Code session all read identically from the terminal, with no way to tell them apart.
-      const { message, type } = await describeEngineError(res)
+      const { message, type } = await describeEngineError(res, (t) => redactLocalPaths(d, t))
       finalizeLog({
         status: res.status, error: { code: type ?? anthropicErrorType(res.status), message },
         durationMs: Date.now() - requestStart,

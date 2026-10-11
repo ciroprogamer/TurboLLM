@@ -26,7 +26,7 @@ function deps(opts: { primary?: { state: string; key: string }; pool?: string[] 
       currentOpts: () => null,
       status: () => ({ state: opts.primary?.state ?? 'stopped', model: opts.primary ? { key: opts.primary.key } : null }),
     },
-    modelRouter: { aliveSlots: () => slots, loadedModelKeys: () => loaded },
+    modelRouter: { aliveSlots: () => slots, loadedModelKeys: () => loaded, poolEngineIds: () => new Set<string>() },
     scanner: { get: (key: string) => library.get(key) },
     registry: { list: () => ({ engines: [LAYA_ENGINE, LLAMA_ENGINE], activeEngineId: LLAMA_ENGINE.id }), active: () => LLAMA_ENGINE },
   } as unknown as Deps
@@ -63,4 +63,10 @@ test('engineDeleteBlocked: the engine serving the loaded model is blocked even w
   const d = deps({ primary: { state: 'running', key: CHAT.key } })
   ;(d.manager as unknown as { currentOpts: () => unknown }).currentOpts = () => ({ engine: litert })
   assert.equal(engineDeleteBlocked(d, litert as never), true)
+})
+
+test('engineDeleteBlocked: an engine running an extra pool slot is blocked even when idle in the primary', () => {
+  const d = deps({})
+  ;(d.modelRouter as unknown as { poolEngineIds: () => Set<string> }).poolEngineIds = () => new Set(['litert'])
+  assert.equal(engineDeleteBlocked(d, { ...LLAMA_ENGINE, id: 'litert', kind: 'litert-lm' } as never), true)
 })

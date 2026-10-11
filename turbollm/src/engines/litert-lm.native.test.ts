@@ -14,7 +14,7 @@ import { pyEngineEnv } from './manager'
 import { engineForModel, Registry } from './registry'
 import { ensureAndroidBundledEngine } from './seed'
 import { planAutoLoad } from './auto-load'
-import { engineInUse, servingEngineKind } from './serving'
+import { engineInUse, servingEngineKind, stopEngineUsers } from './serving'
 import { buildStartOpts } from './start-opts'
 import { litertlmEntryFor } from '../models/litertlm'
 import { resolveUpdateSource } from './update'
@@ -224,4 +224,19 @@ test('engineInUse: the active engine and the one serving the loaded model both c
   assert.equal(engineInUse(d('llama', 'litert'), 'litert'), true)
   assert.equal(engineInUse(d('llama', 'litert'), 'llama'), true)
   assert.equal(engineInUse(d('llama', null), 'litert'), false)
+})
+
+test('engineInUse / stopEngineUsers: an extra pool slot on the engine counts, and is stopped', async () => {
+  const stopped: string[] = []
+  const d = {
+    registry: { active: () => ({ id: 'llama' }) },
+    manager: { currentOpts: () => ({ engine: { id: 'llama' } }), stopAndWait: async () => { stopped.push('primary') } },
+    modelRouter: {
+      poolEngineIds: () => new Set(['litert']),
+      stopPoolSlotsOnEngine: async (id: string) => { stopped.push(`pool:${id}`) },
+    },
+  }
+  assert.equal(engineInUse(d as never, 'litert'), true)
+  await stopEngineUsers(d as never, 'litert')
+  assert.deepEqual(stopped, ['pool:litert'], 'the llama.cpp primary is left alone')
 })

@@ -46,6 +46,8 @@ export interface ModelStatusView {
     /** Id of the engine the loaded model runs on ('' when none); differs from `id` for a .litertlm model served by
      *  LiteRT-LM while another engine is active. */
     servingId: string
+    /** Kind of that engine ('' when none), for clients that shape requests by the serving engine. */
+    servingKind: string
     /** How many generations the engine can serve at once. Omitted — not defaulted to 1 —
      *  when the engine advertises no slot count, exactly as the local route does. */
     parallelSlots?: number
@@ -80,6 +82,7 @@ export function buildModelStatus(d: Deps): ModelStatusView {
     // The engine the loaded model runs on, which is not always the active one: a .litertlm model runs on LiteRT-LM
     // whatever is active. '' when nothing is loaded. The UI's "Running" badge follows this, not `id`.
     servingId: d.manager.currentOpts()?.engine.id ?? '',
+    servingKind: d.manager.currentOpts()?.engine.kind ?? '',
   }
   // NO `engine.error` here — see the interface doc. `ErrInfo.logTail` is the engine's raw
   // stderr and routinely contains absolute host paths. `state` already carries 'error'.

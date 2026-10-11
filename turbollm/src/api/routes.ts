@@ -85,7 +85,7 @@ import { textClassificationStatus } from './text-classification-status'
 import { engineDeleteBlocked, modelDeleteBlocked } from './delete-guards'
 import { annotateCheckpoint } from '../hf/checkpoints'
 import { registerActivityRoutes } from './active-work'
-import { engineInUse } from '../engines/serving'
+import { stopEngineUsers } from '../engines/serving'
 
 type Status = 200 | 201 | 202 | 400 | 401 | 403 | 404 | 409 | 413 | 500 | 501 | 503
 
@@ -409,7 +409,7 @@ export function registerApi(app: Hono, d: Deps): void {
         // Stop the engine if the OLD build of this backend is the running active one, so the
         // swap doesn't leave a stale process pointing at a dir we're about to delete.
         const oldEng = d.registry.list().engines.find((e) => e.binPath === oldBin)
-        if (oldEng && engineInUse(d, oldEng.id)) await d.manager.stopAndWait()
+        if (oldEng) await stopEngineUsers(d, oldEng.id)
         d.registry.activate(newEng.id)
         // GC the old install: unregister its engine entry + delete its tag-keyed dir.
         if (oldEng && oldEng.id !== newEng.id) {
@@ -457,7 +457,7 @@ export function registerApi(app: Hono, d: Deps): void {
     // `[^\\/]+` (not `.+`) so the tag can't greedily span path separators into another segment.
     const backendDirRe = new RegExp(`[\\\\/]engines[\\\\/]llama\\.cpp-[^\\\\/]+-${def.id}[\\\\/]`)
     const engs = d.registry.list().engines.filter((e) => backendDirRe.test(e.binPath))
-    if (engs.some((e) => engineInUse(d, e.id))) await d.manager.stopAndWait()
+    for (const e of engs) await stopEngineUsers(d, e.id)
     for (const e of engs) {
       try { d.registry.remove(e.id) } catch { /* already gone */ }
     }
@@ -806,7 +806,7 @@ export function registerApi(app: Hono, d: Deps): void {
           defaultBranch: out.defaultBranch,
         })
         if (prior) {
-          if (engineInUse(d, prior.id)) await d.manager.stopAndWait()
+          await stopEngineUsers(d, prior.id)
           try { d.registry.remove(prior.id) } catch { /* already gone */ }
         }
         const eng = (await d.registry.add(chooseEngineName(name, prior?.name), out.binPath, {

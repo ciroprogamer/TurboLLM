@@ -26,3 +26,12 @@ test('engineErrorText: the model path, data dir and home dir never reach a clien
   const out = engineErrorText(d as never, 'llama-server', `failed ${homedir()}/m/model.litertlm and ${homedir()}/.turbollm/x and ${homedir()}/y`)
   assert.equal(out, 'failed <model> and <data dir>/x and ~/y')
 })
+
+test('engineErrorText: a path is replaced only as a whole segment, never as the prefix of a longer name', async () => {
+  const { engineErrorText } = await import('./chat-routes')
+  const d = { manager: { currentOpts: () => null }, store: { dir: () => '/home/al/.turbollm' } }
+  assert.equal(
+    engineErrorText(d as never, 'llama-server', 'open /home/al/.turbollm/x failed; see /home/al/.turbollmrc and /home/al/.turbollm.'),
+    'open <data dir>/x failed; see /home/al/.turbollmrc and <data dir>.',
+  )
+})

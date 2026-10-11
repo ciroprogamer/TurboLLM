@@ -1,5 +1,4 @@
 // Chat API routes (spec 07). Conversations CRUD + SSE streaming send + message actions.
-import { homedir } from 'node:os'
 import type { Context, Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { Deps } from '../deps'
@@ -34,6 +33,7 @@ import { getSysInfo } from '../sysinfo/sysinfo'
 import { noteLocalActivity } from '../link/host-idle'
 import { callChatUpstream, resolveChatUpstream, type ChatUpstream } from './chat-upstream'
 import { servingEngine, servingEngineKind } from '../engines/serving'
+import { redactLocalPaths } from '../util/redact-paths'
 
 /** The per-request code-routine trust decision. Exported ONLY so it can be behaviourally
  *  pinned — both generation entry points must call this, never inline the expression.
@@ -871,21 +871,10 @@ export function streamChunkError(chunk: Record<string, unknown>): string | null 
   return null
 }
 
-/** An engine's error text as the chat shows it: the LiteRT-LM context hint where it applies, and local paths (the
- *  model file, the data dir, the home dir) replaced. The text reaches every client of the conversation, a Turbo Link
- *  peer's included, and engines routinely quote the model's absolute path. */
+/** An engine's error text as the chat shows it: the LiteRT-LM context hint where it applies, and local paths
+ *  redacted (redactLocalPaths), since it reaches every client of the conversation, a Turbo Link peer's included. */
 export function engineErrorText(d: Pick<Deps, 'manager' | 'store'>, engineKind: string, raw: string): string {
-  let text = engineKind === 'litert-lm' ? litertLmTurnErrorMessage(raw) : raw
-  const paths: Array<[string | undefined, string]> = [
-    [d.manager.currentOpts()?.modelPath, '<model>'],
-    [d.store.dir(), '<data dir>'],
-    [homedir(), '~'],
-  ]
-  // Longest first, so the model path inside the home dir is replaced whole rather than as "~/…".
-  for (const [p, label] of paths.filter(([p]) => !!p && p.length > 1).sort((a, b) => b[0]!.length - a[0]!.length)) {
-    text = text.split(p!).join(label)
-  }
-  return text
+  return redactLocalPaths(d, engineKind === 'litert-lm' ? litertLmTurnErrorMessage(raw) : raw)
 }
 
 /** The whole generation turn: engine call(s), tool loop, and the ONE write-back that persists

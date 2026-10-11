@@ -119,6 +119,7 @@ function appWithPrimary(primaryKey: string | null) {
     manager: {
       status: () => ({ state: primaryKey ? 'running' : 'stopped', err: null, port: 0, pid: 0, model: null }),
       launchCommand: () => undefined,
+      currentOpts: () => null,
       parallelSlots: () => 1,
       sessionStats: () => null,
       liveGeneration: () => null,
@@ -196,7 +197,7 @@ function appWithHfSearch(hf: Record<string, unknown>) {
   const d = {
     store: { snapshot: () => ({}) },
     hf,
-    registry: { active: () => ({ kind: 'llama-server' }) },
+    registry: { active: () => ({ kind: 'llama-server' }), litertLmEngine: () => undefined },
     scanner: { list: () => ({ models: [], scanning: false, lastScanAt: '' }) },
   } as unknown as Deps
   const app = new Hono()
@@ -391,4 +392,10 @@ test('provenance fallback: unconditional by name, full-path rows resolve by sha2
     [entry({ key: 'gguf-key', path: ggufDest })],
   )
   assert.deepEqual(files.map((f) => f.downloaded), [true])
+})
+
+test('interleaveByRepo: alternates two ranked lists and drops a repo both returned', async () => {
+  const { interleaveByRepo } = await import('./routes')
+  const r = (repo: string) => ({ repo })
+  assert.deepEqual(interleaveByRepo([r('a'), r('b'), r('c')], [r('x'), r('a')]).map((x) => x.repo), ['a', 'x', 'b', 'c'])
 })

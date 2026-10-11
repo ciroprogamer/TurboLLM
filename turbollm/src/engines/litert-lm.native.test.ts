@@ -14,7 +14,8 @@ import { pyEngineEnv } from './manager'
 import { engineForModel, Registry } from './registry'
 import { ensureAndroidBundledEngine } from './seed'
 import { planAutoLoad } from './auto-load'
-import { servingEngineKind } from './serving'
+import { engineInUse, servingEngineKind } from './serving'
+import { buildStartOpts } from './start-opts'
 import { litertlmEntryFor } from '../models/litertlm'
 import { resolveUpdateSource } from './update'
 
@@ -201,4 +202,26 @@ test('servingEngineKind: the engine the loaded model runs on, not the active one
   assert.equal(servingEngineKind(d as never), 'litert-lm')
   const idle = { registry: { active: () => llama }, manager: { currentOpts: () => null } }
   assert.equal(servingEngineKind(idle as never), 'llama-server')
+})
+
+test('buildStartOpts: a Context above the bundle\'s KV-cache size is clamped to it; below it is kept', () => {
+  const litert = engine({ id: 'litert', kind: 'litert-lm', binPath: '/lib/liblitertlm_server.so' })
+  const entry = { ...litertlmEntryFor('/m/lfm_int8.litertlm', '/m', 1, 0, 4096) }
+  const cfg = ConfigStore.load(join(tmpDir('tllm-litert-native-'), 'config.json')).snapshot()
+  const sys = { os: 'android/arm64', cpu: '', cores: 8, ramMB: 8000, gpus: [] }
+  const big = buildStartOpts({ entry, engine: litert, cfg, sys, overrides: { ctx: 128512 }, trigger: 'manual' } as never)
+  assert.equal(big.litertLmConfig?.default.max_num_tokens, 4096)
+  assert.equal(big.model.ctx, 4096)
+  const small = buildStartOpts({ entry, engine: litert, cfg, sys, overrides: { ctx: 2048 }, trigger: 'manual' } as never)
+  assert.equal(small.litertLmConfig?.default.max_num_tokens, 2048)
+})
+
+test('engineInUse: the active engine and the one serving the loaded model both count', () => {
+  const d = (activeId: string, servingId: string | null) => ({
+    registry: { active: () => ({ id: activeId }) },
+    manager: { currentOpts: () => (servingId ? { engine: { id: servingId } } : null) },
+  }) as never
+  assert.equal(engineInUse(d('llama', 'litert'), 'litert'), true)
+  assert.equal(engineInUse(d('llama', 'litert'), 'llama'), true)
+  assert.equal(engineInUse(d('llama', null), 'litert'), false)
 })

@@ -1858,6 +1858,8 @@ function BundledEngineGallery({ list, activeEngine }: { list: EnginesList | unde
   const { data: status } = useStatus()
   const engines = (list?.engines ?? []).filter((e) => e.kind !== 'laya')
   const running = status?.engine.state === 'running' || status?.engine.state === 'starting'
+  // The engine the loaded model runs on — a .litertlm model runs on LiteRT-LM while llama.cpp stays active.
+  const servingId = status?.engine.servingId ?? activeEngine?.id
 
   const use = (e: Engine) => {
     track('engines', 'switch_engine')
@@ -1879,7 +1881,7 @@ function BundledEngineGallery({ list, activeEngine }: { list: EnginesList | unde
             key={e.id}
             engine={e}
             isActive={e.id === activeEngine?.id}
-            isRunning={e.id === activeEngine?.id && running}
+            isRunning={e.id === servingId && running}
             busy={mut.activate.isPending}
             onUse={() => use(e)}
           />
@@ -1927,7 +1929,7 @@ function BundledEngineCard({
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-sm font-semibold text-ink">{names.title}</span>
             {names.detail && <span className="text-[12px] text-muted">{names.detail}</span>}
-            {isActive && (
+            {(isActive || isRunning) && (
               <span className="inline-flex items-center gap-1 text-[11px] font-medium" style={{ color: 'var(--ok)' }}>
                 <Check size={11} /> {isRunning ? 'Running' : 'Active'}
               </span>
@@ -1974,7 +1976,9 @@ function BundledEngineCard({
         <span className="text-[11px] text-muted">
           {isLitert ? '.litertlm models load on it automatically' : 'Updates with the app'}
         </span>
-        {isActive ? (
+        {/* No "Use" for LiteRT-LM: .litertlm models reach it on their own, and making it the active engine would send
+            every GGUF model to it, where they cannot load. */}
+        {isLitert ? null : isActive ? (
           <Button size="sm" variant="outline" disabled>
             In use
           </Button>

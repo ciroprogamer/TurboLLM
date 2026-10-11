@@ -1,4 +1,5 @@
 // Chat API routes (spec 07). Conversations CRUD + SSE streaming send + message actions.
+import { homedir } from 'node:os'
 import type { Context, Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { Deps } from '../deps'
@@ -870,6 +871,23 @@ export function streamChunkError(chunk: Record<string, unknown>): string | null 
   return null
 }
 
+/** An engine's error text as the chat shows it: the LiteRT-LM context hint where it applies, and local paths (the
+ *  model file, the data dir, the home dir) replaced. The text reaches every client of the conversation, a Turbo Link
+ *  peer's included, and engines routinely quote the model's absolute path. */
+export function engineErrorText(d: Pick<Deps, 'manager' | 'store'>, engineKind: string, raw: string): string {
+  let text = engineKind === 'litert-lm' ? litertLmTurnErrorMessage(raw) : raw
+  const paths: Array<[string | undefined, string]> = [
+    [d.manager.currentOpts()?.modelPath, '<model>'],
+    [d.store.dir(), '<data dir>'],
+    [homedir(), '~'],
+  ]
+  // Longest first, so the model path inside the home dir is replaced whole rather than as "~/…".
+  for (const [p, label] of paths.filter(([p]) => !!p && p.length > 1).sort((a, b) => b[0]!.length - a[0]!.length)) {
+    text = text.split(p!).join(label)
+  }
+  return text
+}
+
 /** The whole generation turn: engine call(s), tool loop, and the ONE write-back that persists
  *  the reply. Exported ONLY so tests can drive it with a sink of their own — the persistence
  *  invariant this function owns (GitHub #177: generated output must survive a client that has
@@ -1154,7 +1172,7 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
             : null
           reason = (msg ?? text).trim().slice(0, 500)
         } catch { /* no body */ }
-        if (reason && engineKind === 'litert-lm') reason = litertLmTurnErrorMessage(reason)
+        if (reason) reason = engineErrorText(d, engineKind, reason)
         await emit({ event: 'error', data: { code: 'engine_error', message: reason ? `Engine returned ${res.status}: ${reason}` : `Engine returned ${res.status}` } })
         return
       }
@@ -1202,8 +1220,10 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
           try { chunk = JSON.parse(raw) as Record<string, unknown> } catch { continue }
           const engineError = streamChunkError(chunk)
           if (engineError) {
-            cancelReader() // nothing more is read from this stream; let the engine see the hang-up
-            throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
+            // Nothing more is read from this stream: hang up so the engine stops, and drop the abort hook with it.
+            ac.signal.removeEventListener('abort', cancelReader)
+            cancelReader()
+            throw new EngineStreamError(engineErrorText(d, engineKind, engineError))
           }
 
           // Prompt progress
@@ -1525,8 +1545,10 @@ export async function runGeneration(d: Deps, rawEmit: EmitSink, ctx: GenerationC
             try { chunk = JSON.parse(raw) as Record<string, unknown> } catch { continue }
             const engineError = streamChunkError(chunk)
             if (engineError) {
+              // Nothing more is read from this stream: hang up so the engine stops, and drop the abort hook with it.
+              ac.signal.removeEventListener('abort', cancelReader)
               cancelReader()
-              throw new EngineStreamError(engineKind === 'litert-lm' ? litertLmTurnErrorMessage(engineError) : engineError)
+              throw new EngineStreamError(engineErrorText(d, engineKind, engineError))
             }
             if (chunk.usage) finalUsage = chunk.usage as typeof finalUsage
             if (chunk.timings) finalTimings = chunk.timings as typeof finalTimings

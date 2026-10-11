@@ -85,6 +85,7 @@ import { textClassificationStatus } from './text-classification-status'
 import { engineDeleteBlocked, modelDeleteBlocked } from './delete-guards'
 import { annotateCheckpoint } from '../hf/checkpoints'
 import { registerActivityRoutes } from './active-work'
+import { engineInUse } from '../engines/serving'
 
 type Status = 200 | 201 | 202 | 400 | 401 | 403 | 404 | 409 | 413 | 500 | 501 | 503
 
@@ -408,7 +409,7 @@ export function registerApi(app: Hono, d: Deps): void {
         // Stop the engine if the OLD build of this backend is the running active one, so the
         // swap doesn't leave a stale process pointing at a dir we're about to delete.
         const oldEng = d.registry.list().engines.find((e) => e.binPath === oldBin)
-        if (oldEng && d.registry.active()?.id === oldEng.id) await d.manager.stopAndWait()
+        if (oldEng && engineInUse(d, oldEng.id)) await d.manager.stopAndWait()
         d.registry.activate(newEng.id)
         // GC the old install: unregister its engine entry + delete its tag-keyed dir.
         if (oldEng && oldEng.id !== newEng.id) {
@@ -456,8 +457,7 @@ export function registerApi(app: Hono, d: Deps): void {
     // `[^\\/]+` (not `.+`) so the tag can't greedily span path separators into another segment.
     const backendDirRe = new RegExp(`[\\\\/]engines[\\\\/]llama\\.cpp-[^\\\\/]+-${def.id}[\\\\/]`)
     const engs = d.registry.list().engines.filter((e) => backendDirRe.test(e.binPath))
-    const activeId = d.registry.active()?.id
-    if (engs.some((e) => e.id === activeId)) await d.manager.stopAndWait()
+    if (engs.some((e) => engineInUse(d, e.id))) await d.manager.stopAndWait()
     for (const e of engs) {
       try { d.registry.remove(e.id) } catch { /* already gone */ }
     }
@@ -806,7 +806,7 @@ export function registerApi(app: Hono, d: Deps): void {
           defaultBranch: out.defaultBranch,
         })
         if (prior) {
-          if (d.registry.active()?.id === prior.id) await d.manager.stopAndWait()
+          if (engineInUse(d, prior.id)) await d.manager.stopAndWait()
           try { d.registry.remove(prior.id) } catch { /* already gone */ }
         }
         const eng = (await d.registry.add(chooseEngineName(name, prior?.name), out.binPath, {
@@ -3135,10 +3135,33 @@ function telemetryPreview(level: string, version: string) {
 
 /** The engine-adapted search or browse, or, for `category=text-classification` (ADR-444), the category's own search:
  *  it lists what runs on the Laya engine or vLLM whichever engine is active, so it ignores the active engine. */
-function searchHf(d: Deps, q: string, sort: HfSortOption, category: string | undefined): Promise<HfSearchItem[]> {
+async function searchHf(d: Deps, q: string, sort: HfSortOption, category: string | undefined): Promise<HfSearchItem[]> {
   if (category === TEXT_CLASSIFICATION_CATEGORY) return d.hf.searchTextClassification(q, sort)
   const engineKind = d.registry.active()?.kind
-  return q ? d.hf.searchModels(q, engineKind, sort) : d.hf.browseModels(sort, engineKind)
+  const run = (kind: string | undefined) => (q ? d.hf.searchModels(q, kind, sort) : d.hf.browseModels(sort, kind))
+  // A .litertlm model runs on the LiteRT-LM engine whichever engine is active (engineForModel), so when one is
+  // installed but another is active — the Android app, where llama.cpp is active — search its repos as well;
+  // otherwise the active engine's `filter=gguf` hides every litert-community bundle. Best-effort.
+  if (engineKind !== 'litert-lm' && d.registry.litertLmEngine()) {
+    const [main, litert] = await Promise.all([run(engineKind), run('litert-lm').catch(() => [] as HfSearchItem[])])
+    return interleaveByRepo(main, litert)
+  }
+  return run(engineKind)
+}
+
+/** Alternate two ranked result lists (so neither engine's matches sink below the fold), dropping repeats. */
+export function interleaveByRepo<T extends { repo: string }>(a: T[], b: T[]): T[] {
+  const out: T[] = []
+  const seen = new Set<string>()
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    for (const item of [a[i], b[i]]) {
+      if (item && !seen.has(item.repo)) {
+        seen.add(item.repo)
+        out.push(item)
+      }
+    }
+  }
+  return out
 }
 
 /** Heuristic count of local quant variants that plausibly belong to an HF repo

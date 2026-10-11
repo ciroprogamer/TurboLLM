@@ -478,7 +478,8 @@ export function isNativeLitertLm(binPath: string): boolean {
  *  ("turbollm-litertlm-server 1.0.0 (LiteRT-LM 0.18.0)") in the pip-style form the litert-lm kind stores
  *  ("litert-lm 0.18.0"). `--version` returns before the runtime library is loaded, so this is instant. */
 export async function litertLmNativeVersion(binPath: string): Promise<string> {
-  const { stdout } = await execFileP(binPath, ['--version'], { timeout: 15_000 })
+  // 5 s: it runs at every boot of the app, where a hung probe would hold up engine registration.
+  const { stdout } = await execFileP(binPath, ['--version'], { timeout: 5_000 })
   const m = /LiteRT-LM\s+([\w.+-]+)/.exec(stdout)
   return `litert-lm ${m ? m[1] : stdout.trim() || 'unknown'}`
 }

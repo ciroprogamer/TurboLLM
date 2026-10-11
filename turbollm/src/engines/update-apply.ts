@@ -30,6 +30,7 @@ import { ensureLitertLmEnv } from './litert-lm'
 import { ensureKoboldcpp, koboldcppDir } from './koboldcpp'
 import { ensureLlamafile, llamafileDir } from './llamafile'
 import { primaryVendor } from '../sysinfo/sysinfo'
+import { engineInUse } from './serving'
 import { backendIdFromBinPath, tagFromManagedBinPath, latestTagForInstalled } from './update'
 
 export interface UpdateApplyDeps {
@@ -87,7 +88,7 @@ async function applyLlamaCppUpdate(d: UpdateApplyDeps, engine: Engine, root: str
     if (!newEng) newEng = (await d.registry.add(`llama.cpp ${latestTag} (${backendId})`, newBin)).engine
     // Stop the running engine only if it's the OLD build of this backend.
     const oldEng = d.registry.list().engines.find((e) => e.binPath === engine.binPath)
-    if (oldEng && d.registry.active()?.id === oldEng.id) await d.manager.stopAndWait()
+    if (oldEng && engineInUse(d, oldEng.id)) await d.manager.stopAndWait()
     d.registry.activate(newEng.id)
     if (oldEng && oldEng.id !== newEng.id) {
       try { d.registry.remove(oldEng.id) } catch { /* already gone */ }
@@ -108,7 +109,7 @@ async function applyForkUpdate(d: UpdateApplyDeps, engine: Engine, root: string,
   d.provision.start('turboquant', 'auto_update')
   try {
     const oldEng = d.registry.list().engines.find((e) => e.binPath === engine.binPath)
-    if (oldEng && d.registry.active()?.id === oldEng.id) await d.manager.stopAndWait()
+    if (oldEng && engineInUse(d, oldEng.id)) await d.manager.stopAndWait()
     const tqDir = join(root, 'turboquant')
     rmSync(tqDir, { recursive: true, force: true })
     const bin = await provisionTurboquant(
@@ -131,7 +132,7 @@ async function applyForkUpdate(d: UpdateApplyDeps, engine: Engine, root: string,
 async function applyKoboldcppUpdate(d: UpdateApplyDeps, engine: Engine, root: string, signal?: AbortSignal): Promise<void> {
   d.provision.start('koboldcpp', 'auto_update')
   try {
-    if (d.registry.active()?.id === engine.id) await d.manager.stopAndWait()
+    if (engineInUse(d, engine.id)) await d.manager.stopAndWait()
     rmSync(koboldcppDir(root), { recursive: true, force: true })
     const hasNvidia = primaryVendor() === 'nvidia'
     const rt = await ensureKoboldcpp(root, hasNvidia, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), signal)
@@ -148,7 +149,7 @@ async function applyKoboldcppUpdate(d: UpdateApplyDeps, engine: Engine, root: st
 async function applyLlamafileUpdate(d: UpdateApplyDeps, engine: Engine, root: string, signal?: AbortSignal): Promise<void> {
   d.provision.start('llamafile', 'auto_update')
   try {
-    if (d.registry.active()?.id === engine.id) await d.manager.stopAndWait()
+    if (engineInUse(d, engine.id)) await d.manager.stopAndWait()
     rmSync(llamafileDir(root), { recursive: true, force: true })
     const rt = await ensureLlamafile(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), signal)
     const eng = d.registry.addLlamafile(`llamafile (${rt.version})`, rt.binPath, rt.version)
@@ -168,8 +169,11 @@ const PIP_ENGINE_LABEL: Record<PipEngineKind, string> =
 /** vLLM / MLX / Rapid-MLX / MLX-VLM / LiteRT-LM: upgrade the package in place (uv pip install -U/--upgrade). */
 async function applyPipUpdate(d: UpdateApplyDeps, kind: PipEngineKind, engine: Engine, root: string): Promise<void> {
   d.provision.start(kind, 'auto_update')
+  // LiteRT-LM serves .litertlm models without being active (engineForModel), and activating it sends every GGUF to
+  // it, so an update re-activates it only when it was the active engine already.
+  const wasActive = d.registry.active()?.id === engine.id
   try {
-    if (d.registry.active()?.id === engine.id) await d.manager.stopAndWait()
+    if (engineInUse(d, engine.id)) await d.manager.stopAndWait()
     if (kind === 'mlx') {
       const rt = await ensureMlxEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), true)
       const eng = d.registry.addMlx(`MLX (${rt.version})`, rt.python, rt.version)
@@ -185,7 +189,7 @@ async function applyPipUpdate(d: UpdateApplyDeps, kind: PipEngineKind, engine: E
     } else if (kind === 'litert-lm') {
       const rt = await ensureLitertLmEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), true)
       const eng = d.registry.addLitertLm(`LiteRT-LM (${rt.version})`, rt.python, rt.version)
-      d.registry.activate(eng.id)
+      if (wasActive) d.registry.activate(eng.id)
     } else {
       const rt = await ensureVllmEnv(root, (p) => d.provision.progress(p.phase, p.pct, p.part, p.parts), true)
       const eng = d.registry.addVllm(`vLLM (${rt.version})`, rt.python, rt.version)

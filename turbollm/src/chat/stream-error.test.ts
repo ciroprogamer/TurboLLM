@@ -15,3 +15,14 @@ test('litertLmTurnErrorMessage: explains a context-limit failure and leaves othe
   assert.match(litertLmTurnErrorMessage('RuntimeError: Input token ids are too long. Exceeding the maximum number of tokens allowed: 15123 >= 4096'), /shorter system prompt/)
   assert.equal(litertLmTurnErrorMessage('RuntimeError: GPU lost'), 'RuntimeError: GPU lost')
 })
+
+test('engineErrorText: the model path, data dir and home dir never reach a client', async () => {
+  const { engineErrorText } = await import('./chat-routes')
+  const { homedir } = await import('node:os')
+  const d = {
+    manager: { currentOpts: () => ({ modelPath: `${homedir()}/m/model.litertlm` }) },
+    store: { dir: () => `${homedir()}/.turbollm` },
+  }
+  const out = engineErrorText(d as never, 'llama-server', `failed ${homedir()}/m/model.litertlm and ${homedir()}/.turbollm/x and ${homedir()}/y`)
+  assert.equal(out, 'failed <model> and <data dir>/x and ~/y')
+})

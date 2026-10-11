@@ -134,26 +134,28 @@ export function protoFields(buf: Buffer): ProtoField[] {
   return out
 }
 
-/** StateBuffer.Type values whose length is the context: TYPE_UNSPECIFIED (older exports), TYPE_GLOBAL_KEY_CACHE and
- *  TYPE_GLOBAL_VALUE_CACHE. Local (sliding-window) caches and linear-attention states are left out. */
-const GLOBAL_CACHE_TYPES = new Set([0, 1, 2])
-
-/** The longest sequence the bundle's global KV caches hold (ExecutorMetadata), or 0 when they declare none. */
+/** The longest sequence the bundle's global KV caches hold (ExecutorMetadata), or 0 when they declare none.
+ *  StateBuffer.Type 1/2 are global key/value caches: every one must hold the sequence, so the smallest declared
+ *  length is the limit. 3/4 (local, sliding-window: the length is the window) and 5 (linear-attention state) say
+ *  nothing about context. 0 (TYPE_UNSPECIFIED, older exports) could be either kind, so it is used only when no cache
+ *  is typed, and then the LARGEST length wins: a sliding window is shorter than the context, never longer, so the
+ *  max is the global length, and taking the min could cap Context at a 512-token window. */
 export function executorMetadataMaxSequence(proto: Buffer): number {
-  let max = 0
+  let typed = 0
+  let untyped = 0
   for (const top of protoFields(proto)) {
     if (top.field !== 1 || !top.bytes) continue // llm_executor_metadata
     for (const f of protoFields(top.bytes)) {
       if (f.field !== 2 || !f.bytes) continue // state_buffers
       const fields = protoFields(f.bytes)
       const type = fields.find((x) => x.field === 6)?.varint ?? 0
-      if (!GLOBAL_CACHE_TYPES.has(type)) continue
       const len = fields.find((x) => x.field === 9)?.varint ?? 0 // maximum_sequence_length
-      // Every global cache must hold the sequence, so the smallest declared one is the limit.
-      if (len > 0) max = max === 0 ? len : Math.min(max, len)
+      if (len <= 0) continue
+      if (type === 1 || type === 2) typed = typed === 0 ? len : Math.min(typed, len)
+      else if (type === 0) untyped = Math.max(untyped, len)
     }
   }
-  return max
+  return typed || untyped
 }
 
 /** The hard context limit the bundle declares (see the section comment above), or 0 when the header says nothing or

@@ -13,3 +13,12 @@ export function servingEngine(d: Pick<Deps, 'registry' | 'manager'>): Engine | n
 export function servingEngineKind(d: Pick<Deps, 'registry' | 'manager'>): string {
   return servingEngine(d)?.kind ?? ''
 }
+
+/** True when stopping or replacing `engineId` would pull the engine out from under a loaded model: it is the active
+ *  engine, or the one the loaded model runs on (a .litertlm model on LiteRT-LM while llama.cpp is active). */
+export function engineInUse(
+  d: { registry: Pick<Deps['registry'], 'active'>; manager: Pick<Deps['manager'], 'currentOpts'> },
+  engineId: string,
+): boolean {
+  return d.registry.active()?.id === engineId || d.manager.currentOpts()?.engine.id === engineId
+}

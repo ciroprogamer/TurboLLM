@@ -11,6 +11,7 @@ import {
   litertlmQuantFromName,
 } from './litertlm'
 import { tmpDir } from '../test-support/tmp'
+import { fakeLitertlmBundle as fakeBundle } from '../test-support/litertlm-bundle'
 
 function scratch(t: TestContext): string {
   const dir = tmpDir('turbollm-litertlm-')
@@ -76,45 +77,6 @@ test('litertlmEntryFor flags an empty file as incomplete', () => {
 
 // ── context limit from the header ──────────────────────────────────────────────────────────
 
-function varint(n: number): number[] {
-  const out: number[] = []
-  do {
-    let b = n & 0x7f
-    n = Math.floor(n / 128)
-    if (n > 0) b |= 0x80
-    out.push(b)
-  } while (n > 0)
-  return out
-}
-const pVarint = (field: number, v: number) => [...varint(field * 8), ...varint(v)]
-const pBytes = (field: number, b: number[]) => [...varint(field * 8 + 2), ...varint(b.length), ...b]
-
-/** A minimal .litertlm: the real prefix, a hand-built section FlatBuffer, and the two metadata protos. */
-function fakeBundle(llmMax: number, kvLens: Array<[type: number, len: number]>): Buffer {
-  const llm = Buffer.from(pVarint(5, llmMax))
-  const states = kvLens.flatMap(([type, n]) =>
-    pBytes(2, [...pBytes(1, [...Buffer.from('kv_cache_k_0')]), ...pVarint(6, type), ...pVarint(9, n)]))
-  const exec = Buffer.from(pBytes(1, states))
-  const hdr = Buffer.alloc(108)
-  hdr.writeUInt32LE(12, 0) // root table
-  hdr.writeUInt16LE(8, 4); hdr.writeUInt16LE(8, 6); hdr.writeUInt16LE(0, 8); hdr.writeUInt16LE(4, 10) // root vtable
-  hdr.writeInt32LE(8, 12); hdr.writeUInt32LE(28 - 16, 16) // root → section_metadata
-  hdr.writeUInt16LE(6, 20); hdr.writeUInt16LE(8, 22); hdr.writeUInt16LE(4, 24) // section_metadata vtable
-  hdr.writeInt32LE(8, 28); hdr.writeUInt32LE(36 - 32, 32) // → objects vector
-  hdr.writeUInt32LE(2, 36); hdr.writeUInt32LE(60 - 40, 40); hdr.writeUInt32LE(84 - 44, 44)
-  hdr.writeUInt16LE(12, 48); hdr.writeUInt16LE(24, 50); hdr.writeUInt16LE(0, 52); hdr.writeUInt16LE(4, 54); hdr.writeUInt16LE(12, 56); hdr.writeUInt16LE(20, 58) // object vtable
-  hdr.writeInt32LE(60 - 48, 60); hdr.writeBigUInt64LE(256n, 64); hdr.writeBigUInt64LE(BigInt(256 + llm.length), 72); hdr.writeUInt8(5, 80)
-  hdr.writeInt32LE(84 - 48, 84); hdr.writeBigUInt64LE(512n, 88); hdr.writeBigUInt64LE(BigInt(512 + exec.length), 96); hdr.writeUInt8(9, 104)
-  const file = Buffer.alloc(512 + exec.length)
-  file.write('LITERTLM', 0, 'latin1')
-  file.writeUInt32LE(1, 8); file.writeUInt32LE(6, 12)
-  file.writeBigUInt64LE(BigInt(32 + hdr.length), 24)
-  hdr.copy(file, 32)
-  llm.copy(file, 256)
-  exec.copy(file, 512)
-  return file
-}
-
 test('litertlmNativeCtxFromFile: the global KV caches\' maximum_sequence_length is the limit, the smallest winning', async () => {
   const dir = tmpDir('tllm-litertlm-hdr-')
   const p = join(dir, 'LFM2.5-230M_int8.litertlm')
@@ -128,6 +90,18 @@ test('litertlmNativeCtxFromFile: a sliding-window cache\'s length is its window,
   const p = join(dir, 'gemma.litertlm')
   writeFileSync(p, fakeBundle(32768, [[3, 512], [4, 512], [1, 32768], [2, 32768]]))
   assert.equal(await litertlmNativeCtxFromFile(p), 32768)
+})
+
+test('litertlmNativeCtxFromFile: untyped caches count only when none is typed, and then the largest wins', async () => {
+  const dir = tmpDir('tllm-litertlm-hdr-')
+  // An older export: no types at all, a 512-token sliding window beside the 8192-token global caches.
+  const old = join(dir, 'old.litertlm')
+  writeFileSync(old, fakeBundle(0, [[0, 512], [0, 8192], [0, 8192]]))
+  assert.equal(await litertlmNativeCtxFromFile(old), 8192)
+  // Typed global caches present: untyped ones are ignored, even a shorter one.
+  const mixed = join(dir, 'mixed.litertlm')
+  writeFileSync(mixed, fakeBundle(0, [[0, 512], [1, 4096], [2, 4096]]))
+  assert.equal(await litertlmNativeCtxFromFile(mixed), 4096)
 })
 
 test('litertlmNativeCtxFromFile: no limit when no global cache declares one — LlmMetadata alone is only a default', async () => {

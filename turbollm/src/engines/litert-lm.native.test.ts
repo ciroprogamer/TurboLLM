@@ -3,7 +3,7 @@
 // kind applies unchanged — these tests pin down only what differs because it is not Python, plus the registration and
 // routing that let the app use it with no setup.
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { ConfigStore, type Engine } from '../config/config'
@@ -12,7 +12,7 @@ import { tmpDir } from '../test-support/tmp'
 import { isNativeLitertLm, LITERT_LM_NATIVE_SERVER, litertLmNativeVersion, litertLmProfileToConfig, litertLmServerCommand } from './litert-lm'
 import { pyEngineEnv } from './manager'
 import { engineForModel, Registry } from './registry'
-import { ensureAndroidBundledEngine } from './seed'
+import { ensureAndroidBundledEngine, ensureAndroidModelsDir } from './seed'
 import { planAutoLoad } from './auto-load'
 import { engineInUse, servingEngineKind, stopEngineUsers } from './serving'
 import { buildStartOpts } from './start-opts'
@@ -239,4 +239,18 @@ test('engineInUse / stopEngineUsers: an extra pool slot on the engine counts, an
   assert.equal(engineInUse(d as never, 'litert'), true)
   await stopEngineUsers(d as never, 'litert')
   assert.deepEqual(stopped, ['pool:litert'], 'the llama.cpp primary is left alone')
+})
+
+test('ensureAndroidModelsDir: the app\'s imported-models folder is always a model folder there, and only there', (t) => {
+  const home = tmpDir('tllm-android-home-')
+  const prevHome = process.env.HOME
+  process.env.HOME = home
+  t.after(() => { process.env.HOME = prevHome })
+  const store = ConfigStore.load(join(tmpDir('tllm-litert-native-'), 'config.json'))
+  ensureAndroidModelsDir(store, {}) // Termux / desktop: untouched
+  assert.deepEqual(store.snapshot().modelDirs, [])
+  ensureAndroidModelsDir(store, { TURBOLLM_ANDROID_NATIVE_LIB_DIR: '/app/lib' })
+  ensureAndroidModelsDir(store, { TURBOLLM_ANDROID_NATIVE_LIB_DIR: '/app/lib' })
+  assert.deepEqual(store.snapshot().modelDirs, [join(home, 'models')], 'added once, and the folder exists')
+  assert.ok(existsSync(join(home, 'models')))
 })

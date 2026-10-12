@@ -2,9 +2,11 @@
 // GPU vendor, downloads the fastest llama.cpp backend it supports, and registers
 // it — trying the recommended backend, then Vulkan, then CPU if one won't probe.
 // No-ops if any engine is already configured. Never throws.
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Registry } from './registry'
+import type { ConfigStore } from '../config/config'
 import type { ProvisionState } from './provision-state'
 import { amdApuOnly, getSysInfo, primaryVendor } from '../sysinfo/sysinfo'
 import { LITERT_LM_NATIVE_SERVER, litertLmNativeVersion } from './litert-lm'
@@ -173,4 +175,22 @@ export async function seedDefaultEngines(
   // real-world case) the download succeeding but the binary failing its post-download probe.
   provision.fail(`Could not download a default engine.${lastError ? ` [${lastError}]` : ' Check your connection or add one manually.'}`)
   console.warn('seed: could not provision a default engine — add one manually in Settings.')
+}
+
+/** The packaged Android app imports models into `<HOME>/models` (TurboLLM-Android ModelImport.kt; HOME is the app's
+ *  files dir), so that folder is always one of the model folders there, added before the first scan. The app also
+ *  registers it after an import, but that request can fail (the daemon still starting at first launch), and the
+ *  imported models must not then sit in an unscanned folder. A no-op outside the packaged app, Termux included. */
+export function ensureAndroidModelsDir(store: Pick<ConfigStore, 'snapshot' | 'update'>, env: NodeJS.ProcessEnv = process.env): void {
+  if (!env.TURBOLLM_ANDROID_NATIVE_LIB_DIR) return
+  const dir = join(homedir(), 'models')
+  try {
+    mkdirSync(dir, { recursive: true })
+  } catch {
+    return
+  }
+  if (store.snapshot().modelDirs.includes(dir)) return
+  store.update((cfg) => {
+    if (!cfg.modelDirs.includes(dir)) cfg.modelDirs.push(dir)
+  })
 }
